@@ -1,7 +1,5 @@
 """neatlogs spend is only as right as these numbers: Anthropic's published per-MTok prices."""
 
-from types import SimpleNamespace
-
 from droid_monkey.pricing import cost_usd
 
 
@@ -20,19 +18,19 @@ def test_unknown_models_are_not_guessed():
     assert cost_usd("gpt-9", 1000, 1000) is None
 
 
-def test_neatlogs_usage_hook_adds_the_cost(monkeypatch):
-    from neatlogs import anthropic as nl_anthropic
-    from droid_monkey import tracing
-    monkeypatch.setattr(nl_anthropic, "_set_usage_attributes", lambda span, usage: None)
-    tracing._price_api_calls()
+def test_llm_spans_get_neatlogs_tokens_and_cost():
+    from droid_monkey.tracing import _add_neatlogs_usage
 
-    class Span:
-        attributes = {"neatlogs.llm.model_name": "claude-haiku-5-5"}
+    class Span:  # what OpenInference's LangChain instrumentation leaves on an LLM span
+        attributes = {"llm.model_name": "claude-haiku-5-5", "llm.token_count.prompt": 13000,
+                      "llm.token_count.completion": 900}
 
         def set_attribute(self, k, v):
             self.attributes = {**self.attributes, k: v}
 
     span = Span()
-    nl_anthropic._set_usage_attributes(span, SimpleNamespace(input_tokens=13000, output_tokens=900,
-                                                             cache_read_input_tokens=0, cache_creation_input_tokens=0))
-    assert span.attributes["neatlogs.llm.cost_usd"] == 0.00175
+    _add_neatlogs_usage(span)
+    a = span.attributes
+    assert a["neatlogs.llm.model_name"] == "claude-haiku-5-5"
+    assert (a["neatlogs.llm.token_count.prompt"], a["neatlogs.llm.token_count.completion"]) == (13000, 900)
+    assert a["neatlogs.llm.cost_usd"] == 0.00175

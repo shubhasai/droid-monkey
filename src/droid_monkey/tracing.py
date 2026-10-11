@@ -37,31 +37,49 @@ def init(workflow: str = "droid-monkey", tags: list[str] | None = None) -> bool:
 
 
 def _price_api_calls() -> None:
-    """neatlogs records each Anthropic call's model and tokens but no price, so the dashboard's spend stays $0.
-    Add the cost to the same span, from Anthropic's published prices (pricing.py)."""
+    """droid-monkey's model calls go through LangChain, traced by OpenInference's LangChain instrumentation. Those LLM
+    spans carry OpenInference's llm.* attributes, while neatlogs prices and counts neatlogs.llm.* ones, so the
+    dashboard showed 0 tokens and $0.00. After OpenInference fills a span, copy the model and token counts across
+    and add the cost from Anthropic's published prices (pricing.py)."""
     try:
-        from neatlogs import anthropic as nl_anthropic
+        from openinference.instrumentation.langchain import _tracer as oi
     except ImportError:
         return
-    original = getattr(nl_anthropic, "_set_usage_attributes", None)
+    original = getattr(oi, "_update_span", None)
     if original is None or getattr(original, "_droid_monkey", False):
         return
 
-    def with_cost(span, usage):
-        original(span, usage)
+    def update_span(span, run):
+        original(span, run)
         try:
-            from .pricing import cost_usd
-            model = (getattr(span, "attributes", None) or {}).get("neatlogs.llm.model_name", "")
-            cost = cost_usd(model, getattr(usage, "input_tokens", 0) or 0, getattr(usage, "output_tokens", 0) or 0,
-                            getattr(usage, "cache_read_input_tokens", 0) or 0,
-                            getattr(usage, "cache_creation_input_tokens", 0) or 0)
-            if cost is not None:
-                span.set_attribute("neatlogs.llm.cost_usd", cost)
-        except Exception:  # pricing is best effort; never break the call
+            if getattr(run, "run_type", "") == "llm":
+                _add_neatlogs_usage(span)
+        except Exception:  # pricing is best effort; never break the traced call
             pass
 
-    with_cost._droid_monkey = True
-    nl_anthropic._set_usage_attributes = with_cost
+    update_span._droid_monkey = True
+    oi._update_span = update_span
+
+
+def _add_neatlogs_usage(span) -> None:
+    from .pricing import cost_usd
+    attrs = getattr(span, "attributes", None) or {}
+    model = attrs.get("llm.model_name") or ""
+    prompt = int(attrs.get("llm.token_count.prompt") or 0)
+    out = int(attrs.get("llm.token_count.completion") or 0)
+    cache_read = int(attrs.get("llm.token_count.prompt_details.cache_read") or 0)
+    cache_write = int(attrs.get("llm.token_count.prompt_details.cache_write") or 0)
+    if model:
+        span.set_attribute("neatlogs.llm.model_name", model)
+    span.set_attribute("neatlogs.llm.token_count.prompt", prompt)
+    span.set_attribute("neatlogs.llm.token_count.completion", out)
+    span.set_attribute("neatlogs.llm.token_count.total", prompt + out)
+    span.set_attribute("neatlogs.llm.token_count.cache_read", cache_read)
+    span.set_attribute("neatlogs.llm.token_count.cache_write", cache_write)
+    cost = cost_usd(model, max(0, prompt - cache_read - cache_write), out, cache_read, cache_write)
+    if cost is not None:
+        span.set_attribute("neatlogs.llm.cost_usd", cost)
+        span.set_attribute("llm.cost.total", cost)
 
 
 class ClaudeCodeSpan:
