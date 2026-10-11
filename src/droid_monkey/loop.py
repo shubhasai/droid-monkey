@@ -71,7 +71,8 @@ def _subject(summary: str, limit: int = 72) -> str:
 class Loop:
     def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
                  only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False,
-                 naive: bool = False, compile_tool: bool = True, auto_fix: bool = False):
+                 naive: bool = False, compile_tool: bool = True, auto_fix: bool = False, agent: str = "claude"):
+        self.agent = agent
         self.compile_tool = compile_tool
         self.auto_fix = auto_fix
         self.ctx, self.cfg, self.smap, self.profile = ctx, ctx.cfg, smap, profile
@@ -279,8 +280,8 @@ class Loop:
         res = coder.fix(self.cfg.app_dir, self.cfg.module, coder.failure_text(state["result"], spec.__dict__), d,
                         self.coder_model, resume_session=state.get("coder_session"),
                         failure_note=state.get("failure_note", ""), variant=self.cfg.variant,
-                        java_home=self.cfg.java_home, compile_tool=self.compile_tool)
-        line = (f"fix: claude -p changed {res.changed or 'nothing'} in {res.seconds:.0f}s (${res.cost_usd:.2f} plan usage)"
+                        java_home=self.cfg.java_home, compile_tool=self.compile_tool, agent=self.agent, llm=self.cfg.llm)
+        line = (f"fix: {self.agent} changed {res.changed or 'nothing'} in {res.seconds:.0f}s (${res.cost_usd:.2f})"
                 + (f"; discarded out-of-bounds edits {res.rejected}" if res.rejected else ""))
         return {"coder_session": res.session_id, "coder_cost": state.get("coder_cost", 0.0) + res.cost_usd,
                 "coder_tokens": state.get("coder_tokens", 0) + res.tokens,
@@ -368,7 +369,7 @@ class Loop:
         (out / "summary.json").write_text(json.dumps({
             "run_id": state["run_id"], "branch": state.get("branch"),
             "mode": "naive" if self.naive else "droid-monkey", "diagnoser_model": self.cfg.llm.model,
-            "coder_model": self.coder_model, "coder_compile_tool": self.compile_tool,
+            "coder_model": self.coder_model, "coder_agent": self.agent, "coder_compile_tool": self.compile_tool,
             "outcomes": state.get("outcomes", [])}, indent=2))
         (out / "log.txt").write_text("\n".join(state.get("log", [])))
         fixed = sum(1 for o in state.get("outcomes", []) if o["status"] == "fixed")
@@ -421,13 +422,13 @@ class Loop:
 def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
         only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print,
         fail_first_fix: bool = False, naive: bool = False, compile_tool: bool = True, auto_fix: bool = False,
-        ask=None) -> dict:
+        ask=None, agent: str = "claude") -> dict:
     """`ask(proposal) -> "yes" | "no" | "all"` answers the approval question; without it nothing is fixed unasked."""
     tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}", f"mode:{'naive' if naive else 'droid-monkey'}"])
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix, naive=naive,
-                compile_tool=compile_tool, auto_fix=auto_fix)
+                compile_tool=compile_tool, auto_fix=auto_fix, agent=agent)
     state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
 

@@ -86,15 +86,15 @@ class ClaudeCodeSpan:
     """An LLM span for one `claude -p` session (a separate process neatlogs cannot see into), carrying the exact
     model, tokens and cost that Claude Code reports, so analysis, exploration and fixes show up in spend."""
 
-    def __init__(self, name: str, model: str | None, prompt: str):
+    def __init__(self, name: str, model: str | None, prompt: str, system: str = "claude-code"):
         self.span = None
         if not _state["enabled"]:
             return
         try:
             from neatlogs._wrap_utils import get_provider_tracer
-            self.span = get_provider_tracer().start_span(name=f"claude-code.{name}", attributes={
-                "neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
-                "neatlogs.llm.system": "claude-code", "neatlogs.llm.model_name": model or "claude-code",
+            self.span = get_provider_tracer().start_span(name=f"{system}.{name}", attributes={
+                "neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai" if system == "codex" else "anthropic",
+                "neatlogs.llm.system": system, "neatlogs.llm.model_name": model or system,
                 "neatlogs.llm.input_messages.0.role": "user",
                 "neatlogs.llm.input_messages.0.content": prompt[:4000]})
         except Exception:

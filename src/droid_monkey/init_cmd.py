@@ -77,6 +77,7 @@ def write_config(app_dir: Path, d: Detected) -> Path:
         + (f"java_home: {d.java_home}   # this repo's Gradle needs an older JDK\n" if d.java_home else "")
         +
         "# Optional:\n"
+        "# agent: auto          # coding agent: auto (Claude Code, else Codex, else Anthropic API) | claude | codex | api\n"
         "# entry_steps: [\"tap text:Log in\", \"fill\", \"tap login_button\"]   # apps behind a login\n"
         "# fill_values: {email: test@example.com}\n"
     )

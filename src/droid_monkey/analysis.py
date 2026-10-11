@@ -95,7 +95,8 @@ Rules: base every claim on code you actually read and cite file:line. Use only t
 any other file. Keep ANALYSIS.md under 150 lines."""
 
 
-def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5-5") -> AnalysisResult:
+def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5-5", agent: str = "claude",
+        llm=None) -> AnalysisResult:
     out_dir = data_dir(app_dir)
     profile.save(profile_path(app_dir))
 
@@ -103,8 +104,9 @@ def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5
         work = Path(tmp)
         source_snapshot(app_dir, work)
         prompt = PROMPT.format(profile=_profile_brief(profile), faults=", ".join(FAULT_TYPES))
-        result = claude_code.run(prompt, cwd=work, allowed_tools=["Read", "Grep", "Glob", "Write"], model=model,
-                                 name="analyze")
+        from . import agents
+        result = agents.run(agent, prompt, cwd=work, allowed_tools=["Read", "Grep", "Glob", "Write"], model=model,
+                            name="analyze", llm=llm)
         md, fj = work / "ANALYSIS.md", work / "flows.json"
         if not result.ok or not md.exists() or not fj.exists():
             raise claude_code.ClaudeCodeError(f"analysis did not produce both files: {result.text[:300]}")
@@ -113,7 +115,7 @@ def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5
         flows_path(app_dir).write_text(json.dumps({"flows": flows}, indent=2))
 
     meta = {"session_id": result.session_id, "cost_usd": result.cost_usd, "seconds": result.seconds,
-            "turns": result.turns, "model": model, "usage": result.usage}
+            "turns": result.turns, "model": model, "agent": agent, "usage": result.usage}
     (out_dir / "analysis-run.json").write_text(json.dumps(meta, indent=2))
     return AnalysisResult(out_dir / "ANALYSIS.md", flows_path(app_dir), flows, result.session_id,
                           result.cost_usd, result.seconds)

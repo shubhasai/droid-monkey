@@ -143,11 +143,29 @@ def init(app_dir: Path, force: bool) -> None:
                    + ("" if ok else f"  ({hint})"))
 
 
+AGENT = click.option("--agent", type=click.Choice(["auto", "claude", "codex", "api"]), default=None,
+                     help="Coding agent: Claude Code, Codex, or droid-monkey's own agent on the Anthropic API. "
+                          "Default: `agent` in monkey.yaml, else auto (the first one installed, in that order).")
+
+
+def _agent(cfg, requested: str | None, model: str | None) -> tuple[str, str | None]:
+    """The coding agent to use and the model to give it; says which one was picked."""
+    from . import agents
+    try:
+        backend = agents.resolve(requested or cfg.agent, cfg.llm)
+    except agents.AgentError as e:
+        raise click.ClickException(str(e)) from None
+    chosen = agents.model_for(backend, model, cfg.agent_model)
+    click.echo(f"coding agent: {agents.NAMES[backend]}" + (f" ({chosen})" if chosen else ""))
+    return backend, chosen
+
+
 @main.command()
 @APP_DIR
-@click.option("--static-only", is_flag=True, help="Only the free static scan; skip the Claude Code read.")
-@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for the Claude Code analysis.")
-def analyze(app_dir: Path, static_only: bool, model: str) -> None:
+@click.option("--static-only", is_flag=True, help="Only the free static scan; skip the coding agent's read.")
+@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for the coding agent's analysis.")
+@AGENT
+def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> None:
     """Analyse the app's repo: manifest, dependencies, risk patterns, then a Claude Code read -> ANALYSIS.md."""
     cfg = config_mod.load(app_dir)
     prof = profile_mod.analyze(cfg.app_dir, cfg.package, cfg.module, cfg.variant)
@@ -165,9 +183,10 @@ def analyze(app_dir: Path, static_only: bool, model: str) -> None:
         prof.save(out)
         click.echo(f"profile: {out}")
         return
-    click.echo(f"\nClaude Code ({model}) is reading the source...")
-    res = analysis_mod.run(cfg.app_dir, prof, model=model)
-    click.echo(f"{len(res.flows)} flows worth testing ({res.seconds:.0f}s, ${res.cost_usd:.2f} of plan usage):")
+    backend, model = _agent(cfg, agent, model)
+    click.echo("reading the source...")
+    res = analysis_mod.run(cfg.app_dir, prof, model=model, agent=backend, llm=cfg.llm)
+    click.echo(f"{len(res.flows)} flows worth testing ({res.seconds:.0f}s, ${res.cost_usd:.2f}):")
     for f in res.flows:
         faults = ", ".join(sorted({r.get('fault', '?') for r in f.get('risks', [])}))
         click.echo(f"  {f.get('name', '?'):24} {f.get('description', '')[:70]}  [{faults}]")
@@ -176,11 +195,12 @@ def analyze(app_dir: Path, static_only: bool, model: str) -> None:
 
 @main.command()
 @APP_DIR
-@click.option("--mode", type=click.Choice(["claude", "rules"]), default="claude", show_default=True,
-              help="claude: Claude Code reads the code and drives the app (screens + files, uses your Claude plan). "
-                   "rules: free tap-everything exploration without a model.")
-@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for Claude mode.")
-def explore(app_dir: Path, mode: str, model: str) -> None:
+@click.option("--mode", type=click.Choice(["agent", "claude", "rules"]), default="agent", show_default=True,
+              help="agent: the coding agent reads the code and drives the app (screens + files). rules: free "
+                   "tap-everything exploration without a model. (claude is the old name for agent.)")
+@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for agent mode.")
+@AGENT
+def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
     """Explore the installed app and save its screen graph (no faults injected)."""
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
     if mode == "rules":
@@ -189,11 +209,13 @@ def explore(app_dir: Path, mode: str, model: str) -> None:
         from . import claude_explore
         from .designer import load_flows
         prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
-        click.echo(f"Claude Code ({model}) is reading the code and driving the app; this takes a while...")
+        backend, model = _agent(ctx.cfg, agent, model)
+        click.echo("reading the code and driving the app; this takes a while...")
         partial = paths.partial_map_path(ctx.cfg.app_dir)
-        res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model)
+        res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model,
+                                 agent=backend, llm=ctx.cfg.llm)
         smap = res.smap
-        click.echo(f"done in {res.seconds:.0f}s, ${res.cost_usd:.2f} of plan usage\n{res.summary[:1500]}\n")
+        click.echo(f"done in {res.seconds:.0f}s, ${res.cost_usd:.2f}\n{res.summary[:1500]}\n")
         click.echo("replaying every recorded path to check it...")
         checks = claude_explore.verify_paths(ctx, smap)
         for sid, verdict in checks.items():
@@ -376,7 +398,8 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
 @main.command()
 @APP_DIR
 @click.option("--attacks", "only", default=None, help="Comma-separated attack names to run (default: all built-in and saved).")
-@click.option("--coder-model", default="claude-sonnet-5-5", show_default=True, help="Model for the Claude Code fixer.")
+@click.option("--coder-model", default="claude-sonnet-5-5", show_default=True, help="Model for the coding agent that fixes.")
+@AGENT
 @click.option("--run-id", default=None, help="Run id (default: a timestamp). The run branch is droid-monkey/<run-id>.")
 @click.option("--resume", "resume_id", default=None, help="Resume a killed run by its run id.")
 @click.option("--fail-first-fix", is_flag=True, help="Report the first passing verification as failed (labelled), to "
@@ -386,8 +409,8 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
 @click.option("--auto-fix", is_flag=True, help="Fix without asking (CI, benchmarks). By default each fix is shown "
                                                  "with its evidence and suggested change, and waits for your yes.")
 def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None,
-        fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool) -> None:
-    """The full loop: plan, attack, diagnose, ask you, fix with Claude Code, verify by replay, commit."""
+        fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool, agent: str | None) -> None:
+    """The full loop: plan, attack, diagnose, ask you, fix with the coding agent, verify by replay, commit."""
     from . import approval
     if auto_fix:
         click.echo(click.style("--auto-fix: droid-monkey will change code on its run branch without asking you first",
@@ -407,8 +430,9 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     if not _map_path(ctx).exists():
         raise click.ClickException("no screen map yet: run `droid-monkey explore` first")
     smap, prof, saved, known = _load_app(ctx)
+    backend, coder_model = _agent(ctx.cfg, agent, coder_model)
     names = [n.strip() for n in only.split(",")] if only else None
-    final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model,
+    final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model, agent=backend,
                      resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix, naive=naive,
                      compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask)
     click.echo("")

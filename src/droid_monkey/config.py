@@ -29,6 +29,8 @@ class AppConfig:
     fill_values: dict[str, str] = field(default_factory=dict)  # optional: sample values by field-name keyword
     java_home: str | None = None  # optional: JDK for this repo's Gradle (older Gradle cannot run on the newest JDK)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    agent: str = "auto"              # coding agent: auto | claude | codex | api (see agents.py)
+    agent_model: str | None = None   # optional model for that agent
 
 
 def load(app_dir: Path) -> AppConfig:
@@ -46,4 +48,6 @@ def load(app_dir: Path) -> AppConfig:
         fill_values=dict(raw.get("fill_values") or {}),
         java_home=raw.get("java_home"),
         llm=LLMConfig.from_dict(raw.get("llm")),
+        agent=str(raw.get("agent") or "auto"),
+        agent_model=raw.get("agent_model"),
     )

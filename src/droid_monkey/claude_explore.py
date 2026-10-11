@@ -1,7 +1,6 @@
 """`droid-monkey explore` driven by Claude Code: read the code to know every screen and its files, then drive the
 emulator through droid-monkey's device MCP server to reach them all and record the screen graph."""
 
-import json
 import subprocess
 import sys
 import tempfile
@@ -72,8 +71,9 @@ def preflight() -> None:
               "uv tool install --editable --reinstall <path to droid-monkey>")
 
 
-def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model: str = "claude-sonnet-5-5",
-        timeout: float = 3600) -> ClaudeExploreResult:
+def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model: str | None = "claude-sonnet-5-5",
+        timeout: float = 3600, agent: str = "claude", llm=None) -> ClaudeExploreResult:
+    from . import agents
     preflight()
     out.parent.mkdir(parents=True, exist_ok=True)
     flows_text = ""
@@ -84,21 +84,18 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
         work = Path(tmp) / "src"
         work.mkdir()
         source_snapshot(app_dir, work)
-        mcp_config = Path(tmp) / "mcp.json"
-        mcp_config.write_text(json.dumps({"mcpServers": {"device": {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "droid_monkey.device_mcp", "--app-dir", str(app_dir), "--source", str(work),
-                     "--out", str(out)],
-        }}}))
-        result = claude_code.run(
+        device = agents.McpServer("device", "droid_monkey.device_mcp",
+                                  ["--app-dir", str(app_dir), "--source", str(work), "--out", str(out)])
+        result = agents.run(
+            agent,
             PROMPT.format(profile=_profile_brief(profile), flows=flows_text),
             cwd=work,
             allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
+            servers=[device],
             model=model,
             timeout=timeout,
-            mcp_config=mcp_config,
             name="explore",
+            llm=llm,
         )
     if not out.exists():
         raise claude_code.ClaudeCodeError(f"exploration produced no graph: {result.text[:400]}")
