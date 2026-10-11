@@ -3,6 +3,7 @@ name = "droid-monkey"
 version = "0.1.0"
 description = "CLI agent that attacks an Android app with real-world faults, fixes what breaks, and proves each fix by replaying the attack"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "shubhasai", email = "mshubhasai2002@gmail.com" }
 ]

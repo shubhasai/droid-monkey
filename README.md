@@ -176,3 +176,5 @@ No false alarms on either app as it is.
 Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto · neatlogs · Entire
 
 Sample app: [shubhasai/MonkeyMart](https://github.com/shubhasai/MonkeyMart)
+
+License: [MIT](LICENSE)
