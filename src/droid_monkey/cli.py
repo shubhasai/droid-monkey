@@ -6,7 +6,9 @@ from pathlib import Path
 
 import click
 
+from . import analysis as analysis_mod
 from . import config as config_mod
+from . import profile as profile_mod
 from . import scenarios as scenarios_mod
 from .attacks import CATALOGUE, Context
 from .config import Scenario, Target
@@ -66,6 +68,37 @@ def _print_map(smap: ScreenMap) -> None:
 @click.group()
 def main() -> None:
     """Attack an Android app with real-world faults, fix what breaks, prove each fix."""
+
+
+@main.command()
+@APP_DIR
+@click.option("--static-only", is_flag=True, help="Only the free static scan; skip the Claude Code read.")
+@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for the Claude Code analysis.")
+def analyze(app_dir: Path, static_only: bool, model: str) -> None:
+    """Analyse the app's repo: manifest, dependencies, risk patterns, then a Claude Code read -> ANALYSIS.md."""
+    cfg = config_mod.load(app_dir)
+    prof = profile_mod.analyze(cfg.app_dir, cfg.package, cfg.module, cfg.variant)
+    click.echo(click.style(f"{prof.package}", bold=True) + f"  targetSdk {prof.target_sdk}, {prof.ui_toolkit}, "
+               f"{prof.source_files} source files, capabilities: {', '.join(prof.capabilities) or 'none'}")
+    click.echo(f"runtime permissions: {', '.join(x.rsplit('.', 1)[-1] for x in prof.dangerous_permissions) or 'none'}")
+    click.echo(f"{len(prof.signals)} risk signals:")
+    for s in prof.signals:
+        click.echo(f"  {s.kind:36} {s.file}:{s.line}")
+    click.echo("fault types that apply:")
+    for attack, why in prof.applicable_attacks.items():
+        click.echo(f"  {attack:18} {why}")
+    if static_only:
+        out = cfg.app_dir / analysis_mod.OUT_DIR / "profile.json"
+        prof.save(out)
+        click.echo(f"profile: {out}")
+        return
+    click.echo(f"\nClaude Code ({model}) is reading the source...")
+    res = analysis_mod.run(cfg.app_dir, prof, model=model)
+    click.echo(f"{len(res.flows)} flows worth testing ({res.seconds:.0f}s, ${res.cost_usd:.2f} of plan usage):")
+    for f in res.flows:
+        faults = ", ".join(sorted({r.get('fault', '?') for r in f.get('risks', [])}))
+        click.echo(f"  {f.get('name', '?'):24} {f.get('description', '')[:70]}  [{faults}]")
+    click.echo(f"report: {res.markdown_path}\nflows:  {res.flows_path}")
 
 
 @main.command()
