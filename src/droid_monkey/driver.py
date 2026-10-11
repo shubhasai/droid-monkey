@@ -93,6 +93,7 @@ class AppDriver:
         """
         verb, _, arg = step.strip().partition(" ")
         if verb in ("tap", "tap?") and arg.startswith("at:"):
+            self.settle(timeout=5)  # no element to wait for: at least let animations finish
             x, y = arg[3:].split(",")
             self.adb.shell(f"input tap {x} {y}")
         elif verb in ("tap", "tap?"):

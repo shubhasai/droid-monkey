@@ -94,6 +94,16 @@ def _selector(node: ui.Node, screen: ui.Screen | None = None) -> str:
         return f"text:{node.text}"
     if node.desc:
         return f"desc:{node.desc}"
+    if screen is not None:  # Compose often puts the label on a child: an icon's description, a row's title
+        x1, y1, x2, y2 = node.bounds
+        inside = [n for n in screen.nodes if n is not node and n.area and n.area < node.area
+                  and x1 <= n.center[0] <= x2 and y1 <= n.center[1] <= y2]
+        desc = next((n.desc for n in inside if n.desc), "")
+        if desc:
+            return f"desc:{desc}"
+        text = next((n.text for n in inside if n.text and not n.editable), "")
+        if text:
+            return f"text:{text}"
     x, y = node.center
     return f"at:{x},{y}"
 
@@ -186,7 +196,7 @@ class Explorer:
             except (NavigationError, AdbError) as e:
                 self.notes.append(f"{sid}: {e}")
                 continue
-            info.actions = [ActionInfo(selector=_selector(n), label=self._label(screen, n), group=_group(n))
+            info.actions = [ActionInfo(selector=_selector(n, screen), label=self._label(screen, n), group=_group(n))
                             for n in self.clickables(screen)]
             for action in info.actions:
                 if time.time() - self.started > self.budget:

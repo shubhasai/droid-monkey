@@ -102,7 +102,7 @@ class GraphRecorder:
                 continue
             self.elements.append(n)
             kind = "edit" if n.editable else ("scroll" if n.scrollable and not n.clickable else "tap")
-            sel = _selector(n)
+            sel = _selector(n, screen)
             state = f" value={n.text!r}" if n.editable else ""
             mark = " (tried)" if sel in tried else ""
             lines.append(f"  #{len(self.elements)} [{kind}] {sel} {self._label(screen, n)[:50]!r}{state}{mark}")
@@ -164,7 +164,7 @@ class GraphRecorder:
         node = self.resolve(target)
         before = ui.dump(self.ctx.adb)
         from_sid = self.match(before)
-        selector = _selector(node)
+        selector = _selector(node, before)
         action = ActionInfo(selector=selector, label=self._label(before, node), group=_group(node))
         granted_before = self.ctx.device.runtime_permissions()
         logcat.clear(self.ctx.adb)
@@ -268,7 +268,7 @@ class GraphRecorder:
             id=sid, path=self.path_to(parent), title=name, fields=fields,
             fingerprint=sorted(screen.fingerprint(self.package)), description=description, files=found,
         )
-        self.interactive[sid] = {_selector(n) for n in screen.app_nodes(self.package)
+        self.interactive[sid] = {_selector(n, screen) for n in screen.app_nodes(self.package)
                                  if n.area and (n.clickable or n.editable)}
         if self.pending:
             from_sid, action = self.pending

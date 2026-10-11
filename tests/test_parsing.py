@@ -110,3 +110,17 @@ def test_fields_without_ids_are_selected_by_position_not_value():
     second = screen.editable_fields(app_pkg(xml))[1]
     assert _selector(second, screen) == "field:1"
     assert screen.find("field:1") == second
+
+
+def test_clickable_without_label_uses_its_childs_description_or_text():
+    from droid_monkey.explorer import _selector
+    screen = ui.parse(
+        '<?xml version="1.0"?><hierarchy rotation="0">'
+        f'<node class="android.view.View" package="{PKG}" resource-id="" text="" content-desc="" bounds="[900,2100][1050,2250]" clickable="true" scrollable="false" focused="false">'
+        f'<node class="android.view.View" package="{PKG}" resource-id="" text="" content-desc="Add task" bounds="[940,2140][1010,2210]" clickable="false" scrollable="false" focused="false"/></node>'
+        f'<node class="android.view.View" package="{PKG}" resource-id="" text="" content-desc="" bounds="[0,600][1080,780]" clickable="true" scrollable="false" focused="false">'
+        f'<node class="android.widget.TextView" package="{PKG}" resource-id="" text="Statistics" content-desc="" bounds="[100,650][400,730]" clickable="false" scrollable="false" focused="false"/></node>'
+        '</hierarchy>')
+    fab, row = [n for n in screen.nodes if n.clickable]
+    assert _selector(fab, screen) == "desc:Add task"
+    assert _selector(row, screen) == "text:Statistics"
