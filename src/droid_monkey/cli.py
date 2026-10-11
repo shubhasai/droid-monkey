@@ -13,6 +13,8 @@ from . import profile as profile_mod
 from . import scenarios as scenarios_mod
 from . import paths
 from . import specs as specs_mod
+from . import theme
+from .theme import style
 from .config import Target
 from .driver import Context
 from .explorer import Explorer, ScreenMap
@@ -23,7 +25,6 @@ from .tools.device import Device
 
 BUILTIN = specs_mod.builtin_templates()
 
-OUTCOME_COLOR = {"survived": "green", "crashed": "red", "lost_state": "yellow", "no_feedback": "magenta", "skipped": "white"}
 APP_DIR = click.option("--app-dir", type=click.Path(path_type=Path, file_okay=False), default=".",
                        help="The app's repo (holds monkey.yaml).")
 
@@ -45,28 +46,31 @@ def _explore(ctx: Context) -> ScreenMap:
     smap = explorer.explore()
     smap.save(_map_path(ctx))
     for note in explorer.notes:
-        click.echo(click.style(f"  note: {note}", dim=True))
+        theme.note(note)
     return smap
 
 
 def _print_map(smap: ScreenMap) -> None:
-    click.echo(f"{len(smap.screens)} screens, {len(smap.edges)} edges, explored in {smap.seconds:.0f}s "
-               f"({smap.mode} mode; screen-read overhead {smap.baseline_seconds:.1f}s)")
+    theme.header("screen map")
+    click.echo(f"  {style(len(smap.screens), bold=True)} screens, {style(len(smap.edges), bold=True)} edges, "
+               f"explored in {smap.seconds:.0f}s "
+               + style(f"({smap.mode} mode; screen-read overhead {smap.baseline_seconds:.1f}s)", fg="bright_black"))
     for s in smap.screens.values():
         if s.files:
-            click.echo(click.style(f"  [{s.id}] {s.title}", bold=True) + (f"  {s.description}" if s.description else ""))
-            click.echo(f"      files: {', '.join(s.files)}")
+            click.echo(_screen_title(s.id, s.title) + (style(f"  {s.description}", fg="bright_black") if s.description else ""))
+            click.echo(style("      files:  ", fg="bright_black") + ", ".join(s.files))
             if s.fields:
-                click.echo(f"      fields: {', '.join(s.fields)}")
+                click.echo(style("      fields: ", fg="bright_black") + ", ".join(s.fields))
             for a in s.actions:
                 bits = [a.effect] + ([f"-> {a.to_screen}"] if a.to_screen else []) \
                     + ([f"slow {a.settle_seconds:.1f}s"] if (a.showed_progress or a.settle_seconds >= 1.5) else []) \
                     + (["asks " + ", ".join(p.rsplit('.', 1)[-1] for p in a.permissions)] if a.permissions else []) \
-                    + ([f"CRASH {a.crash}"] if a.crash else [])
-                click.echo(f"      {a.label[:40]:40} {' '.join(bits)}")
+                    + ([style(f"CRASH {a.crash}", fg="red", bold=True)] if a.crash else [])
+                click.echo(f"      {_branch()} {a.label[:40]:40} {' '.join(bits)}")
             continue
         form = f", form with {len(s.fields)} fields" if s.has_form else ""
-        click.echo(click.style(f"  [{s.id}] {s.title or '(untitled)'}", bold=True) + f"  depth {len([p for p in s.path if p.startswith('tap')])}{form}")
+        click.echo(_screen_title(s.id, s.title or "(untitled)")
+                   + style(f"  depth {len([p for p in s.path if p.startswith('tap')])}{form}", fg="bright_black"))
         for a in s.actions:
             extra = []
             if a.to_screen:
@@ -76,18 +80,26 @@ def _print_map(smap: ScreenMap) -> None:
             if a.permissions:
                 extra.append("asks " + ", ".join(p.rsplit('.', 1)[-1] for p in a.permissions))
             if a.crash:
-                extra.append(f"CRASH {a.crash}")
-            click.echo(f"      {a.label[:40]:40} {a.effect:12} {' '.join(extra)}")
+                extra.append(style(f"CRASH {a.crash}", fg="red", bold=True))
+            click.echo(f"      {_branch()} {a.label[:40]:40} {a.effect:12} {' '.join(extra)}")
     for c in smap.crashes:
-        click.echo(click.style(f"  crash during exploration: {c}", fg="red"))
+        theme.bad(f"crash during exploration: {c}")
     for u in smap.unreached:
-        click.echo(click.style(f"  not reached: {u.get('screen')}: {u.get('reason')}", fg="yellow"))
+        theme.warn(f"not reached: {u.get('screen')}: {u.get('reason')}")
+
+
+def _screen_title(sid: str, title: str) -> str:
+    return "  " + style(f"[{sid}]", fg="cyan") + " " + style(title, bold=True)
+
+
+def _branch() -> str:
+    return theme.arrow()
 
 
 def _load_app(ctx: Context, re_explore: bool = False):
     """Screen map (explored if missing), targets, static profile, flows and saved specs for this app."""
     if re_explore or not _map_path(ctx).exists():
-        click.echo("exploring the app first...")
+        theme.note("no screen map yet, so the monkey explores the app first...")
         smap = _explore(ctx)
         _print_map(smap)
     else:
@@ -101,23 +113,25 @@ def _load_app(ctx: Context, re_explore: bool = False):
     )
     saved, broken = specs_mod.load_all(ctx.cfg.app_dir, known)
     for fname, errors in broken.items():
-        click.echo(click.style(f"  invalid spec {fname}: {'; '.join(errors)}", fg="red"))
+        theme.bad(f"invalid spec {fname}: {'; '.join(errors)}")
     return smap, prof, saved, known
 
 
 def _echo_result(name: str, result) -> None:
     detail = result.exception or result.reason
-    click.echo(f"{name:28} " + click.style(f"{result.outcome:11}", fg=OUTCOME_COLOR.get(result.outcome))
-               + f" {detail}  ({result.seconds:.0f}s)")
+    lines = [detail] if detail else []
     if result.crash_signature:
-        click.echo(f"{'':28} at {result.crash_signature}")
-    for key, (old, new) in result.lost_fields.items():
-        click.echo(f"{'':28} {key}: {old!r} -> {new!r}")
+        lines.append(f"at {result.crash_signature}")
+    lines += [f"{key}: {old!r} -> {new!r}" for key, (old, new) in result.lost_fields.items()]
+    lines.append(f"took {result.seconds:.0f}s")
+    label = theme.BADGES.get(result.outcome, ("", "", result.outcome))[2].upper()
+    theme.monkey_says(result.outcome, f"{label}  {name}", lines)
 
 
 @click.group()
+@click.version_option(package_name="droid-monkey", message="%(prog)s %(version)s  (o.o)")
 def main() -> None:
-    """Attack an Android app with real-world faults, fix what breaks, prove each fix."""
+    """(o.o) Attack an Android app with real-world faults, fix what breaks, prove each fix."""
 
 
 @main.command()
@@ -126,21 +140,37 @@ def main() -> None:
 def init(app_dir: Path, force: bool) -> None:
     """Write monkey.yaml for this Android repo and check everything droid-monkey needs."""
     from . import init_cmd
+    theme.banner("init")
     app_dir = Path(app_dir).resolve()
     cfg_path = app_dir / config_mod.CONFIG_NAME
+    theme.header("monkey.yaml")
     if cfg_path.exists() and not force:
-        click.echo(f"{cfg_path.name} already exists (use --force to rewrite it)")
+        theme.note(f"{cfg_path.name} already exists (use --force to rewrite it)")
     else:
         d = init_cmd.detect(app_dir)
         if not d.package or not d.module:
             raise click.ClickException("no Android application module with an applicationId found here; "
                                        "run init from the app repo's root")
         init_cmd.write_config(app_dir, d)
-        click.echo(click.style(f"wrote {cfg_path}", fg="green") + f": package {d.package}, module {d.module}, avd {d.avd}")
-    click.echo("checks:")
+        theme.ok(f"wrote {cfg_path}")
+        theme.kv("package", d.package)
+        theme.kv("module", d.module)
+        theme.kv("avd", str(d.avd))
+    theme.header("checking the jungle", "(o_O)")
+    missing = 0
     for name, ok, hint in init_cmd.checks(app_dir):
-        click.echo(f"  {click.style('ok  ', fg='green') if ok else click.style('MISSING', fg='red')} {name}"
-                   + ("" if ok else f"  ({hint})"))
+        if ok:
+            click.echo(f"  {style('(^.^) ok     ', fg='green')} {name}")
+        else:
+            missing += 1
+            click.echo(f"  {style('(x_x) MISSING', fg='red', bold=True)} {name}  "
+                       + style(f"({hint})", fg="bright_black"))
+    click.echo("")
+    if missing:
+        theme.monkey_says("worried", f"{missing} THING{'S' if missing != 1 else ''} MISSING",
+                          ["the monkey can't swing without them"])
+    else:
+        theme.monkey_says("survived", "ALL SET", ["the jungle is ready", "next: droid-monkey analyze"])
 
 
 AGENT = click.option("--agent", type=click.Choice(["auto", "claude", "codex", "api"]), default=None,
@@ -156,7 +186,8 @@ def _agent(cfg, requested: str | None, model: str | None) -> tuple[str, str | No
     except agents.AgentError as e:
         raise click.ClickException(str(e)) from None
     chosen = agents.model_for(backend, model, cfg.agent_model)
-    click.echo(f"coding agent: {agents.NAMES[backend]}" + (f" ({chosen})" if chosen else ""))
+    theme.kv("agent", style(agents.NAMES[backend], fg="cyan", bold=True)
+             + (style(f"  {chosen}", fg="bright_black") if chosen else ""))
     return backend, chosen
 
 
@@ -167,30 +198,43 @@ def _agent(cfg, requested: str | None, model: str | None) -> tuple[str, str | No
 @AGENT
 def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> None:
     """Analyse the app's repo: manifest, dependencies, risk patterns, then a Claude Code read -> ANALYSIS.md."""
+    theme.banner("analyze")
     cfg = config_mod.load(app_dir)
     prof = profile_mod.analyze(cfg.app_dir, cfg.package, cfg.module, cfg.variant)
-    click.echo(click.style(f"{prof.package}", bold=True) + f"  targetSdk {prof.target_sdk}, {prof.ui_toolkit}, "
-               f"{prof.source_files} source files, capabilities: {', '.join(prof.capabilities) or 'none'}")
-    click.echo(f"runtime permissions: {', '.join(x.rsplit('.', 1)[-1] for x in prof.dangerous_permissions) or 'none'}")
-    click.echo(f"{len(prof.signals)} risk signals:")
+    theme.header(prof.package)
+    theme.kv("targetSdk", str(prof.target_sdk))
+    theme.kv("ui", prof.ui_toolkit)
+    theme.kv("sources", f"{prof.source_files} files")
+    theme.kv("can do", ", ".join(prof.capabilities) or "none")
+    theme.kv("asks for", ", ".join(x.rsplit('.', 1)[-1] for x in prof.dangerous_permissions) or "none")
+    theme.header(f"{len(prof.signals)} risk signals: ripe bananas", "(^.^)")
     for s in prof.signals:
-        click.echo(f"  {s.kind:36} {s.file}:{s.line}")
-    click.echo("fault types that apply:")
+        click.echo(f"  {style(f'{s.kind:36}', fg='yellow')} {style(f'{s.file}:{s.line}', fg='bright_black')}")
+    if not prof.signals:
+        theme.note("none found by the static scan")
+    theme.header("fault types that apply", "(>.<)")
     for attack, why in prof.applicable_attacks.items():
-        click.echo(f"  {attack:18} {why}")
+        click.echo(f"  {style(f'{attack:18}', bold=True)} {why}")
     if static_only:
         out = paths.profile_path(cfg.app_dir)
         prof.save(out)
-        click.echo(f"profile: {out}")
+        click.echo("")
+        theme.path_line("profile", out)
         return
+    theme.header("reading the code", "(o_O)")
     backend, model = _agent(cfg, agent, model)
-    click.echo("reading the source...")
-    res = analysis_mod.run(cfg.app_dir, prof, model=model, agent=backend, llm=cfg.llm)
-    click.echo(f"{len(res.flows)} flows worth testing ({res.seconds:.0f}s, ${res.cost_usd:.2f}):")
+    with theme.working("the monkey is reading every branch of your source..."):
+        res = analysis_mod.run(cfg.app_dir, prof, model=model, agent=backend, llm=cfg.llm)
+    theme.header(f"{len(res.flows)} flows worth testing")
     for f in res.flows:
         faults = ", ".join(sorted({r.get('fault', '?') for r in f.get('risks', [])}))
-        click.echo(f"  {f.get('name', '?'):24} {f.get('description', '')[:70]}  [{faults}]")
-    click.echo(f"report: {res.markdown_path}\nflows:  {res.flows_path}")
+        name = f.get("name", "?")
+        click.echo(f"  {style(f'{name:24}', bold=True)} "
+                   f"{f.get('description', '')[:70]}  " + style(f"[{faults}]", fg="magenta"))
+    click.echo("")
+    theme.kv("took", f"{res.seconds:.0f}s, ${res.cost_usd:.2f}")
+    theme.path_line("report", res.markdown_path)
+    theme.path_line("flows", res.flows_path)
 
 
 @main.command()
@@ -202,6 +246,7 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
 @AGENT
 def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
     """Explore the installed app and save its screen graph (no faults injected)."""
+    theme.banner("explore")
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
     if mode == "rules":
         smap = _explore(ctx)
@@ -210,26 +255,33 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
         from .designer import load_flows
         prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
         backend, model = _agent(ctx.cfg, agent, model)
-        click.echo("reading the code and driving the app; this takes a while...")
         partial = paths.partial_map_path(ctx.cfg.app_dir)
-        res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model,
-                                 agent=backend, llm=ctx.cfg.llm)
+        with theme.working("swinging through your screens (reading the code and driving the app)..."):
+            res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model,
+                                     agent=backend, llm=ctx.cfg.llm)
         smap = res.smap
-        click.echo(f"done in {res.seconds:.0f}s, ${res.cost_usd:.2f}\n{res.summary[:1500]}\n")
-        click.echo("replaying every recorded path to check it...")
-        checks = claude_explore.verify_paths(ctx, smap)
+        theme.ok(f"explored in {res.seconds:.0f}s, ${res.cost_usd:.2f}")
+        click.echo(f"\n{res.summary[:1500]}")
+        theme.header("replaying every recorded path")
+        with theme.working("retracing the monkey's steps..."):
+            checks = claude_explore.verify_paths(ctx, smap)
         for sid, verdict in checks.items():
-            click.echo(f"  {sid:24} " + click.style(verdict, fg="green" if verdict == "ok" else "red"))
+            if verdict == "ok":
+                click.echo(f"  {style('(^.^)', fg='green')} {sid:24} " + style("replays", fg="green"))
+            else:
+                click.echo(f"  {style('(x_x)', fg='red')} {sid:24} " + style(verdict, fg="red"))
         bad = [sid for sid, v in checks.items() if v != "ok"]
         if bad:
             smap.unreached += [{"screen": sid, "reason": f"recorded path does not replay ({checks[sid]})"} for sid in bad]
         smap.save(_map_path(ctx))  # replaces the previous map only now that the run finished and was checked
         partial.unlink(missing_ok=True)
     _print_map(smap)
-    click.echo("\nattack candidates:")
+    theme.header("where the monkey will strike", "(>.<)")
     for c in scenarios_mod.generate(smap):
-        click.echo(f"  {c.attack:18} [{c.screen}] {c.action or '-':28} {c.reason}")
-    click.echo(f"map: {_map_path(ctx)}")
+        click.echo(f"  {style(f'{c.attack:18}', fg='yellow', bold=True)} {style(f'[{c.screen}]', fg='cyan')} "
+                   f"{c.action or '-':28} {style(c.reason, fg='bright_black')}")
+    click.echo("")
+    theme.path_line("map", _map_path(ctx))
 
 
 @main.command()
@@ -246,25 +298,27 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
 def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_explore: bool, build: bool,
            run_id: str | None, diagnose: bool) -> None:
     """Run an attack: a built-in one, a saved spec by name, `builtin`, `custom` or `all`. No fixing."""
+    theme.banner(f"attack {name}")
     best = None
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
     from . import provenance
     mismatch = None if build else provenance.check(ctx.cfg.app_dir, ctx.adb, ctx.cfg.package)
     if build is None and mismatch:
-        click.echo(f"building first: {mismatch}")
+        theme.note(f"building first: {mismatch}")
         build, mismatch = True, None
     elif mismatch:
-        click.echo(click.style(f"warning: {mismatch}; results describe the installed build, not this source", fg="yellow"))
+        theme.warn(f"{mismatch}; results describe the installed build, not this source")
         if diagnose:
-            click.echo(click.style("--diagnose skipped: it reads this source, which is not what is installed", fg="yellow"))
+            theme.warn("--diagnose skipped: it reads this source, which is not what is installed")
             diagnose = False
     if build:
-        res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
+        with theme.working("gradle is growing the banana tree..."):
+            res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
         if not res.ok or not res.apk:
             raise click.ClickException(f"build failed:\n{res.log_tail}")
         gradle.install(ctx.adb, res.apk, package=ctx.cfg.package, source_dir=ctx.cfg.app_dir)
-        click.echo(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
+        theme.ok(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
     smap, prof, saved, known = _load_app(ctx, re_explore)
     candidates = scenarios_mod.generate(smap)
 
@@ -283,7 +337,8 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
     for attack_name in names:
         if attack_name in saved:
             spec = saved[attack_name]
-            click.echo(click.style(f"{attack_name}: ", bold=True) + spec.description)
+            theme.header(attack_name, "(>.<)")
+            click.echo(style(f"  {spec.description}", fg="bright_black"))
         else:
             best = scenarios_mod.best(candidates, attack_name)
             if target:
@@ -292,23 +347,40 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
                                                best.permission if best else None)
             elif best and action is not None:
                 best.action = action.removeprefix("tap ") or None
+            theme.header(attack_name, "(>.<)")
             if best is None:
-                click.echo(f"{attack_name:28} skipped: the explorer found nowhere to apply it")
+                click.echo(f"  {theme.badge('skipped')} the explorer found nowhere to apply it")
                 continue
             try:
                 spec = specs_mod.render(BUILTIN[attack_name], best.values(), known)
             except specs_mod.SpecError as e:
-                click.echo(f"{attack_name:28} skipped: {e}")
+                click.echo(f"  {theme.badge('skipped')} {e}")
                 continue
-            click.echo(click.style(f"{attack_name}: ", bold=True) + best.reason)
-        result = SpecRunner(ctx, spec).run()
+            click.echo(style(f"  {best.reason}", fg="bright_black"))
+        with theme.working(f"monkeying with the app: {attack_name}..."):
+            result = SpecRunner(ctx, spec).run()
         results.append(result)
         _echo_result(attack_name, result)
         if diagnose and result.outcome not in ("survived", "skipped"):
             _suggest_fix(ctx, smap, spec, result, best.reason if attack_name in BUILTIN and best else spec.description)
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
     (ctx.run_dir / "results.json").write_text(json.dumps([r.__dict__ for r in results], indent=2))
-    click.echo(f"evidence: {ctx.run_dir}")
+    _attack_summary(results)
+    theme.path_line("evidence", ctx.run_dir)
+
+
+def _attack_summary(results) -> None:
+    if not results:
+        return
+    theme.header("scoreboard", "(^o^)")
+    for r in results:
+        click.echo(f"  {theme.badge(r.outcome)} {r.attack}")
+    broke = sum(1 for r in results if r.outcome not in ("survived", "skipped"))
+    if broke:
+        theme.monkey_says("crashed", f"THE MONKEY BROKE {broke} OF {len(results)}",
+                          ["the app has bugs worth fixing", "see the suggested fixes with --diagnose"])
+    else:
+        theme.monkey_says("survived", f"SURVIVED ALL {len(results)}", ["the monkey went home hungry"])
 
 
 def _suggest_fix(ctx, smap, spec, result, reason: str) -> None:
@@ -316,13 +388,13 @@ def _suggest_fix(ctx, smap, spec, result, reason: str) -> None:
     from . import approval
     from .diagnoser import diagnose as run_diagnoser
     screen = smap.screens.get(spec.screen)
-    click.echo("diagnosing ...")
-    d = run_diagnoser(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, asdict(result), spec.__dict__,
-                      asdict(screen) if screen else None)
+    with theme.working("sniffing out the root cause..."):
+        d = run_diagnoser(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, asdict(result), spec.__dict__,
+                          asdict(screen) if screen else None)
     p = approval.proposal({"name": spec.name, "reason": reason}, asdict(result), d.to_dict())
-    click.echo(approval.render(p).rsplit("\nIf you approve", 1)[0])
+    click.echo(approval.render(p, footer=False))
     (Path(result.evidence_dir) / "suggested-fix.json").write_text(json.dumps(p, indent=2))
-    click.echo(f"to apply it: droid-monkey run --attacks {spec.name}")
+    click.echo("  ->  to apply it: " + style(f"droid-monkey run --attacks {spec.name}", fg="cyan"))
 
 
 @main.group()
@@ -336,14 +408,18 @@ def attacks_list(app_dir: Path) -> None:
     """Built-in attacks and the app's saved specs."""
     ctx = _context(app_dir, "attacks-list")
     _, _, saved, _ = _load_app(ctx)
-    click.echo(click.style(f"built-in ({specs_mod.BUILTIN_DIR})", bold=True))
+    theme.header("built-in tricks")
+    theme.note(str(specs_mod.BUILTIN_DIR))
     for n, t in BUILTIN.items():
-        click.echo(f"  {n:34} {t['description']}")
-    click.echo(click.style(f"saved specs ({specs_mod.spec_dir(ctx.cfg.app_dir)})", bold=True))
+        click.echo(f"  {style(f'{n:34}', fg='yellow', bold=True)} {t['description']}")
+    theme.header("this app's own tricks", "(^.^)")
+    theme.note(str(specs_mod.spec_dir(ctx.cfg.app_dir)))
     for n, sp in saved.items():
-        click.echo(f"  {n:34} [{sp.fault_type}, {sp.source}] {sp.description}")
+        click.echo(f"  {style(f'{n:34}', fg='yellow', bold=True)} "
+                   + style(f"[{sp.fault_type}, {sp.source}]", fg="magenta") + f" {sp.description}")
     if not saved:
-        click.echo("  none yet: try `droid-monkey attacks suggest` or `droid-monkey attacks new \"...\"`")
+        click.echo("  none yet: try " + style("droid-monkey attacks suggest", fg="cyan") + " or "
+                   + style('droid-monkey attacks new "..."', fg="cyan"))
 
 
 @attacks.command("show")
@@ -360,19 +436,25 @@ def attacks_show(name: str, app_dir: Path) -> None:
 def _design(app_dir: Path, goal: str, source: str, try_on_device: bool, max_tries: int) -> None:
     from .designer import Designer, load_flows
     ctx = _context(app_dir, time.strftime(f"design-%Y%m%d-%H%M%S"))
+    theme.banner("attack designer")
     smap, prof, saved, _ = _load_app(ctx)
     flows = load_flows(ctx.cfg.app_dir)
     if not flows:
-        click.echo(click.style("no analysis yet: run `droid-monkey analyze` for better attacks", fg="yellow"))
+        theme.warn("no analysis yet: run `droid-monkey analyze` for better attacks")
     designer = Designer(ctx, smap, prof, flows, saved, allow_try=try_on_device, max_tries=max_tries)
-    click.echo(f"attack designer ({ctx.cfg.llm.provider}/{ctx.cfg.llm.model}) is working...")
-    res = designer.run(goal, source)
+    theme.header("designing new mischief", "(>.<)")
+    theme.kv("designer", f"{ctx.cfg.llm.provider}/{ctx.cfg.llm.model}")
+    with theme.working("the monkey is scheming..."):
+        res = designer.run(goal, source)
+    if res.tries:
+        theme.header("tried on the emulator")
     for t in res.tries:
-        click.echo(f"  tried {t['spec']:30} -> {t.get('outcome')}: {(t.get('exception') or t.get('reason') or '')[:90]}")
+        click.echo(f"  {theme.badge(t.get('outcome') or '?')} {style(f"{t['spec']:30}", bold=True)} "
+                   + style((t.get('exception') or t.get('reason') or '')[:90], fg="bright_black"))
     for p in res.saved:
-        click.echo(click.style(f"  saved {p}", fg="green"))
+        theme.ok(f"saved {p}")
     click.echo(f"\n{res.summary}\n")
-    click.echo(f"{res.turns} turns, {res.input_tokens:,} in / {res.output_tokens:,} out tokens, ~${res.cost_usd:.3f}")
+    theme.kv("cost", f"{res.turns} turns, {res.input_tokens:,} in / {res.output_tokens:,} out tokens, ~${res.cost_usd:.3f}")
 
 
 @attacks.command("suggest")
@@ -412,16 +494,15 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
         fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool, agent: str | None) -> None:
     """The full loop: plan, attack, diagnose, ask you, fix with the coding agent, verify by replay, commit."""
     from . import approval
+    theme.banner("run")
     if auto_fix:
-        click.echo(click.style("--auto-fix: droid-monkey will change code on its run branch without asking you first",
-                               fg="yellow"))
+        theme.warn("--auto-fix: droid-monkey will change code on its run branch without asking you first")
 
     def ask(proposal: dict) -> str:
         if sys.stdin.isatty():
             return approval.ask_terminal(proposal)
         click.echo(approval.render(proposal))
-        click.echo(click.style("not a terminal, so not fixing without approval: rerun with --auto-fix to fix "
-                               "without asking", fg="yellow"))
+        theme.warn("not a terminal, so not fixing without approval: rerun with --auto-fix to fix without asking")
         return "no"
 
     from . import loop
@@ -430,18 +511,30 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     if not _map_path(ctx).exists():
         raise click.ClickException("no screen map yet: run `droid-monkey explore` first")
     smap, prof, saved, known = _load_app(ctx)
+    theme.header(f"run {run_id}")
+    theme.kv("app", ctx.cfg.package)
     backend, coder_model = _agent(ctx.cfg, agent, coder_model)
     names = [n.strip() for n in only.split(",")] if only else None
     final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model, agent=backend,
-                     resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix, naive=naive,
+                     resume=bool(resume_id), echo=theme.loop_echo, fail_first_fix=fail_first_fix, naive=naive,
                      compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask)
+    from .report import score_of
+    outcomes = final.get("outcomes", [])
+    theme.header("scoreboard", "(^o^)")
+    for o in outcomes:
+        extra = (style(f"  {o['commit'][:8]}", fg="yellow")
+                 + (style(f" checkpoint {o['checkpoint']}", fg="bright_black") if o.get("checkpoint") else "")
+                 if o.get("commit") else "")
+        click.echo(f"  {theme.badge(o['status'])} {style(f"{o['attack']:28}", bold=True)} "
+                   + style(f"was {o['before']}", fg="bright_black") + extra)
+    if outcomes:
+        score = score_of(outcomes)
+        fixed = sum(1 for o in outcomes if o["status"] == "fixed")
+        theme.score_monkey(score, f"RESILIENCE  {theme.banana_meter(score)}",
+                           [theme.verdict_line(score), f"{fixed} fixed, {len(outcomes)} attacks"])
     click.echo("")
-    for o in final.get("outcomes", []):
-        color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow",
-                 "unreachable": "yellow", "declined": "yellow"}.get(o["status"])
-        extra = f"  {o['commit'][:8]}" + (f" checkpoint {o['checkpoint']}" if o.get("checkpoint") else "") if o.get("commit") else ""
-        click.echo(f"  {o['attack']:28} " + click.style(f"{o['status']:9}", fg=color) + f" was {o['before']}{extra}")
-    click.echo(f"branch: {final.get('branch')}   evidence: {ctx.run_dir}")
+    theme.kv("branch", style(str(final.get("branch")), fg="cyan"))
+    theme.path_line("evidence", ctx.run_dir)
 
 
 @main.command()
@@ -452,8 +545,13 @@ def report(run_id: str, app_dir: Path) -> None:
     from . import report as report_mod
     cfg = config_mod.load(app_dir)
     r = report_mod.build(cfg.app_dir, cfg.package, run_id)
-    click.echo(f"resilience {r.score}/100, {r.fixed} of {r.total} attacks fixed")
-    click.echo(f"  PR body:    {r.pr_body}\n  score card: {r.score_card}\n  dashboard:  {r.dashboard}")
+    theme.header(f"report {run_id}", "(^o^)")
+    theme.score_monkey(r.score, f"RESILIENCE  {theme.banana_meter(r.score)}",
+                       [theme.verdict_line(r.score), f"{r.fixed} of {r.total} attacks fixed"])
+    click.echo("")
+    theme.path_line("PR body", r.pr_body)
+    theme.path_line("score card", r.score_card)
+    theme.path_line("dashboard", r.dashboard)
 
 
 @main.command()
@@ -471,7 +569,8 @@ def pr(run_id: str, app_dir: Path, base: str, draft: bool) -> None:
     branch = summary["branch"]
     fixed = r.fixed
     title = f"droid-monkey: fix {fixed} lifecycle bug{'s' if fixed != 1 else ''} (resilience {r.score}/100)"
-    click.echo(f"pushing {branch} ...")
+    theme.header("opening a PR", "(^o^)")
+    theme.note(f"pushing {branch} ...")
     subprocess.run(["git", "push", "-u", "origin", branch], cwd=cfg.app_dir, check=True)
     cmd = ["gh", "pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", str(r.pr_body)]
     if draft:
@@ -479,7 +578,7 @@ def pr(run_id: str, app_dir: Path, base: str, draft: bool) -> None:
     out = subprocess.run(cmd, cwd=cfg.app_dir, capture_output=True, text=True)
     if out.returncode != 0:
         raise click.ClickException(out.stderr.strip())
-    click.echo(click.style(out.stdout.strip(), fg="green"))
+    theme.ok(f"bananas delivered: {out.stdout.strip()}")
 
 
 @main.command()
@@ -491,5 +590,6 @@ def compare(run_a: str, run_b: str, app_dir: Path) -> None:
     from . import report as report_mod
     cfg = config_mod.load(app_dir)
     md, out = report_mod.compare(cfg.app_dir, run_a, run_b)
+    theme.header(f"{run_a}  vs  {run_b}")
     click.echo(md)
-    click.echo(f"saved: {out}")
+    theme.path_line("saved", out)

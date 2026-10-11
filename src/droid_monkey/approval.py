@@ -46,36 +46,48 @@ def proposal(item: dict, result: dict, diagnosis: dict) -> dict:
     }
 
 
-def render(p: dict) -> str:
-    h = lambda t: click.style(t, bold=True)
-    lines = ["", click.style(f"── {p['attack']}: {p['outcome']} ", fg="red", bold=True) + "─" * 40,
-             f"{h('Issue:')} {p['detail']}"]
+def render(p: dict, footer: bool = True) -> str:
+    from .theme import BADGES, FACES, style
+    h = lambda t: style(t, bold=True)
+    bar = style("| ", fg="bright_black")
+    color = BADGES.get(p["outcome"], ("", "red"))[1]
+    face = FACES.get(p["outcome"], FACES["worried"])
+    # the monkey peeks over the top of the fix proposal
+    lines = [""] + ["   " + style(row, fg=color, bold=True) for row in face[:-1]]
+    lines.append(style("." + "-" * 7, fg="bright_black") + style(face[-1].strip(), fg=color, bold=True)
+                 + style("--( ", fg="bright_black") + style(p["attack"], fg="yellow", bold=True)
+                 + style(f": {BADGES.get(p['outcome'], ('', '', p['outcome']))[2]} )", fg=color, bold=True)
+                 + style("-" * 30, fg="bright_black"))
+    lines.append(bar + h("Issue:") + f" {p['detail']}")
     if p.get("retry"):
         r = p["retry"]
-        lines.append(click.style(f"Retry {r['attempt']} of {r['max']}: ", fg="yellow", bold=True)
+        lines.append(bar + style(f"Retry {r['attempt']} of {r['max']}: ", fg="yellow", bold=True)
                      + f"the previous fix failed verification: {r['previous_failed']}")
-        lines.append("  The diagnosis below is revised. Saying no restores the code to the last good commit.")
+        lines.append(bar + "  The diagnosis below is revised. Saying no restores the code to the last good commit.")
     if p.get("why"):
-        lines.append(f"{h('Why this attack:')} {p['why']}")
+        lines.append(bar + h("Why this attack:") + f" {p['why']}")
     if p["evidence"]:
-        lines.append(h("Evidence (measured on the device):"))
-        lines += [f"  {e}" for e in p["evidence"]]
+        lines.append(bar + h("Evidence (measured on the device):"))
+        lines += [bar + f"    {e}" for e in p["evidence"]]
     if p["evidence_files"]:
-        lines.append("  files: " + ", ".join(p["evidence_files"]))
-    lines.append(f"{h('Root cause:')} {p['root_cause']}")
+        lines.append(bar + style("    files: " + ", ".join(p["evidence_files"]), fg="bright_black"))
+    lines.append(bar + h("Root cause:") + f" {p['root_cause']}")
     if p["code_evidence"]:
-        lines += [f"  {e}" for e in p["code_evidence"][:6]]
-    lines.append(f"{h('Suggested fix:')} {p['fix_approach']}")
-    lines.append(f"  files: {', '.join(p['files_to_change'])}")
-    lines.append(f"{h('Regression test:')} {p['test_plan']}")
-    lines.append("If you approve, Claude Code makes this fix; droid-monkey replays the identical attack and runs the "
-                 "test, and commits only if both pass.")
+        lines += [bar + style(f"    {e}", fg="cyan") for e in p["code_evidence"][:6]]
+    lines.append(bar + h("Suggested fix:") + f" {p['fix_approach']}")
+    lines.append(bar + style(f"    files: {', '.join(p['files_to_change'])}", fg="bright_black"))
+    lines.append(bar + h("Regression test:") + f" {p['test_plan']}")
+    lines.append(style("'-- ", fg="bright_black") + style(
+        "If you approve, a coding agent makes this fix; droid-monkey replays the identical attack and runs the "
+        "test, and commits only if both pass." if footer else "suggested only: no code was changed", fg="bright_black"))
     return "\n".join(lines)
 
 
 def ask_terminal(p: dict) -> str:
+    from .theme import style
     click.echo(render(p))
-    answer = click.prompt("Fix it? [y]es / [n]o / [a]ll remaining without asking", default="y",
-                          show_default=False, type=click.Choice(sorted(ANSWERS), case_sensitive=False),
+    answer = click.prompt(style("(o.o)?", fg="yellow", bold=True) + " " + style("Fix it?", bold=True)
+                          + " [y]es / [n]o / [a]ll remaining without asking",
+                          default="y", show_default=False, type=click.Choice(sorted(ANSWERS), case_sensitive=False),
                           show_choices=False)
     return ANSWERS[answer.lower()]
