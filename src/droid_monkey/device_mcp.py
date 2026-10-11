@@ -15,6 +15,7 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 from . import config as config_mod
+from . import paths
 from .driver import AppDriver, Context, NavigationError
 from .explorer import ActionInfo, ScreenInfo, ScreenMap, _group, _selector, _similar
 from .tools import emulator, logcat, ui
@@ -34,6 +35,9 @@ class GraphRecorder:
         self.d = AppDriver(self.ctx, run_dir / "explore")
         self.package, self.source_dir, self.out = cfg.package, source_dir, out
         self.map = ScreenMap(package=cfg.package, mode="claude")
+        # The previous map, so a re-explored screen keeps its id and saved specs keep working.
+        prev_path = paths.map_path(app_dir)
+        self.previous = ScreenMap.load(prev_path) if prev_path.exists() else None
         self.path: list[str] = []
         self.elements: list[ui.Node] = []
         self.current: str | None = None
@@ -236,6 +240,12 @@ class GraphRecorder:
             self.set_current(existing)
             return f"this screen is already recorded as '{existing}'"
         sid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or f"screen_{len(self.map.screens) + 1}"
+        fp = screen.fingerprint(self.package)
+        if self.previous:  # stable ids: the same screen as last time keeps last time's id
+            for old_id, old in self.previous.screens.items():
+                if old_id not in self.map.screens and _similar(fp, frozenset(old.fingerprint)):
+                    sid = old_id
+                    break
         while sid in self.map.screens:
             sid += "_2"
         found = [f for f in files if (self.source_dir / f).is_file()]

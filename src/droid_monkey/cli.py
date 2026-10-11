@@ -121,6 +121,29 @@ def main() -> None:
 
 @main.command()
 @APP_DIR
+@click.option("--force", is_flag=True, help="Overwrite an existing monkey.yaml.")
+def init(app_dir: Path, force: bool) -> None:
+    """Write monkey.yaml for this Android repo and check everything droid-monkey needs."""
+    from . import init_cmd
+    app_dir = Path(app_dir).resolve()
+    cfg_path = app_dir / config_mod.CONFIG_NAME
+    if cfg_path.exists() and not force:
+        click.echo(f"{cfg_path.name} already exists (use --force to rewrite it)")
+    else:
+        d = init_cmd.detect(app_dir)
+        if not d.package or not d.module:
+            raise click.ClickException("no Android application module with an applicationId found here; "
+                                       "run init from the app repo's root")
+        init_cmd.write_config(app_dir, d)
+        click.echo(click.style(f"wrote {cfg_path}", fg="green") + f": package {d.package}, module {d.module}, avd {d.avd}")
+    click.echo("checks:")
+    for name, ok, hint in init_cmd.checks(app_dir):
+        click.echo(f"  {click.style('ok  ', fg='green') if ok else click.style('MISSING', fg='red')} {name}"
+                   + ("" if ok else f"  ({hint})"))
+
+
+@main.command()
+@APP_DIR
 @click.option("--static-only", is_flag=True, help="Only the free static scan; skip the Claude Code read.")
 @click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for the Claude Code analysis.")
 def analyze(app_dir: Path, static_only: bool, model: str) -> None:
@@ -325,7 +348,10 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
 @click.option("--coder-model", default="claude-sonnet-5-5", show_default=True, help="Model for the Claude Code fixer.")
 @click.option("--run-id", default=None, help="Run id (default: a timestamp). The run branch is droid-monkey/<run-id>.")
 @click.option("--resume", "resume_id", default=None, help="Resume a killed run by its run id.")
-def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None) -> None:
+@click.option("--fail-first-fix", is_flag=True, help="Report the first passing verification as failed (labelled), to "
+                                                      "demonstrate the retry path.")
+def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None,
+        fail_first_fix: bool) -> None:
     """The full loop: plan, attack, diagnose, fix with Claude Code, verify by replay, commit. Unattended."""
     from . import loop
     run_id = resume_id or run_id or time.strftime("run-%Y%m%d-%H%M%S")
@@ -335,7 +361,7 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     smap, prof, saved, known = _load_app(ctx)
     names = [n.strip() for n in only.split(",")] if only else None
     final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model,
-                     resume=bool(resume_id), echo=click.echo)
+                     resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix)
     click.echo("")
     for o in final.get("outcomes", []):
         color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow"}.get(o["status"])

@@ -43,14 +43,16 @@ class RunState(TypedDict, total=False):
     changed: list[str]
     tests: list[str]
     verify: dict
+    forced_failure_done: bool
     outcomes: list[dict]
     log: list[str]
 
 
 class Loop:
     def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
-                 only: list[str] | None, coder_model: str, echo=print):
+                 only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False):
         self.ctx, self.cfg, self.smap, self.profile = ctx, ctx.cfg, smap, profile
+        self.fail_first_fix = fail_first_fix
         self.saved, self.known, self.only = saved, known, only
         self.coder_model = coder_model
         self.echo = echo
@@ -68,6 +70,24 @@ class Loop:
         reply = self.llm().invoke(prompt)
         m = re.search(r"\{.*\}|\[.*\]", reply.text, flags=re.S)
         return json.loads(m.group(0)) if m else {}
+
+    def with_watchdog(self, state: RunState, what: str, fn):
+        """Run fn(); if adb or the emulator hangs, restart the emulator, reinstall the app, and retry once."""
+        from .tools import emulator
+        from .tools.adb import AdbHang
+        from .tools.device import Device
+        try:
+            return fn(), []
+        except AdbHang as e:
+            log = self.note(state, f"watchdog: {what} hung ({e}); restarting the emulator")
+            adb = emulator.restart(self.ctx.adb, self.cfg.avd or emulator.list_avds()[0])
+            self.ctx.adb, self.ctx.device = adb, Device(adb, self.cfg.package)
+            build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant)
+            if build.ok and build.apk:
+                gradle.install(adb, build.apk)
+            log = log + [f"{time.strftime('%H:%M:%S')} watchdog: emulator back, app reinstalled; retrying {what}"]
+            self.echo(log[-1])
+            return fn(), log[len(state.get('log', [])):]
 
     def spec(self, item: dict) -> specs_mod.Spec:
         return specs_mod.parse(item["spec_yaml"], self.known)
@@ -133,9 +153,10 @@ class Loop:
                 "failure_note": "", "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
 
     def attack(self, state: RunState) -> RunState:
-        res = SpecRunner(self.ctx, self.spec(state["current"])).run()
+        res, wlog = self.with_watchdog(state, "the attack", lambda: SpecRunner(self.ctx, self.spec(state["current"])).run())
         detail = res.exception or res.reason
         line = f"attack {res.attack}: {res.outcome} ({detail})" + (f" at {res.crash_signature}" if res.crash_signature else "")
+        state = {**state, "log": state.get("log", []) + wlog}
         return {"result": asdict(res), "log": self.note(state, line)}
 
     def decide(self, state: RunState) -> RunState:
@@ -193,7 +214,15 @@ class Loop:
         if not state.get("changed"):
             return {"decision": "verify_failed", "failure_note": "the coder changed no source files",
                     "log": self.note(state, "verify: nothing to verify, the coder changed no files")}
-        v = verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", []))
+        v, wlog = self.with_watchdog(state, "verification",
+                                     lambda: verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", [])))
+        state = {**state, "log": state.get("log", []) + wlog}
+        if v.fixed and self.fail_first_fix and not state.get("forced_failure_done"):
+            note = ("FORCED FAILURE (--fail-first-fix, for demonstrating recovery): this verification passed "
+                    f"({v.reason}), but it is reported as failed so the retry path runs. Treat the fix as rejected by "
+                    "review: re-examine the root cause and make the fix more robust.")
+            return {"decision": "verify_failed", "failure_note": note, "forced_failure_done": True,
+                    "log": self.note(state, "verify: passed, but --fail-first-fix forces this first verification to fail")}
         if v.fixed:
             return {"decision": "fixed", "failure_note": "", "verify": {"replay": asdict(v.replay), "test": asdict(v.test)},
                     "log": self.note(state, f"verify: FIXED: {v.reason}")}
@@ -273,11 +302,12 @@ class Loop:
 
 
 def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
-        only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print) -> dict:
+        only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print,
+        fail_first_fix: bool = False) -> dict:
     tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}"])
     from langgraph.checkpoint.sqlite import SqliteSaver
 
-    loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo)
+    loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix)
     state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
 
