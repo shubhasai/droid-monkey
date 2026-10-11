@@ -50,8 +50,21 @@ def _explore(ctx: Context) -> ScreenMap:
 
 
 def _print_map(smap: ScreenMap) -> None:
-    click.echo(f"{len(smap.screens)} screens explored in {smap.seconds:.0f}s (screen-read overhead {smap.baseline_seconds:.1f}s)")
+    click.echo(f"{len(smap.screens)} screens, {len(smap.edges)} edges, explored in {smap.seconds:.0f}s "
+               f"({smap.mode} mode; screen-read overhead {smap.baseline_seconds:.1f}s)")
     for s in smap.screens.values():
+        if s.files:
+            click.echo(click.style(f"  [{s.id}] {s.title}", bold=True) + (f"  {s.description}" if s.description else ""))
+            click.echo(f"      files: {', '.join(s.files)}")
+            if s.fields:
+                click.echo(f"      fields: {', '.join(s.fields)}")
+            for a in s.actions:
+                bits = [a.effect] + ([f"-> {a.to_screen}"] if a.to_screen else []) \
+                    + ([f"slow {a.settle_seconds:.1f}s"] if (a.showed_progress or a.settle_seconds >= 1.5) else []) \
+                    + (["asks " + ", ".join(p.rsplit('.', 1)[-1] for p in a.permissions)] if a.permissions else []) \
+                    + ([f"CRASH {a.crash}"] if a.crash else [])
+                click.echo(f"      {a.label[:40]:40} {' '.join(bits)}")
+            continue
         form = f", form with {len(s.fields)} fields" if s.has_form else ""
         click.echo(click.style(f"  [{s.id}] {s.title or '(untitled)'}", bold=True) + f"  depth {len([p for p in s.path if p.startswith('tap')])}{form}")
         for a in s.actions:
@@ -67,6 +80,8 @@ def _print_map(smap: ScreenMap) -> None:
             click.echo(f"      {a.label[:40]:40} {a.effect:12} {' '.join(extra)}")
     for c in smap.crashes:
         click.echo(click.style(f"  crash during exploration: {c}", fg="red"))
+    for u in smap.unreached:
+        click.echo(click.style(f"  not reached: {u.get('screen')}: {u.get('reason')}", fg="yellow"))
 
 
 def _load_app(ctx: Context, re_explore: bool = False):
@@ -138,10 +153,33 @@ def analyze(app_dir: Path, static_only: bool, model: str) -> None:
 
 @main.command()
 @APP_DIR
-def explore(app_dir: Path) -> None:
-    """Explore the installed app and save its screen map (no faults injected)."""
+@click.option("--mode", type=click.Choice(["claude", "rules"]), default="claude", show_default=True,
+              help="claude: Claude Code reads the code and drives the app (screens + files, uses your Claude plan). "
+                   "rules: free tap-everything exploration without a model.")
+@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for Claude mode.")
+def explore(app_dir: Path, mode: str, model: str) -> None:
+    """Explore the installed app and save its screen graph (no faults injected)."""
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
-    smap = _explore(ctx)
+    if mode == "rules":
+        smap = _explore(ctx)
+    else:
+        from . import claude_explore
+        from .designer import load_flows
+        prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
+        click.echo(f"Claude Code ({model}) is reading the code and driving the app; this takes a while...")
+        res = claude_explore.run(ctx.cfg.app_dir, prof, ctx.run_dir / "screen-map.json",
+                                 load_flows(ctx.cfg.app_dir), model=model)
+        smap = res.smap
+        click.echo(f"done in {res.seconds:.0f}s, ${res.cost_usd:.2f} of plan usage\n{res.summary[:1500]}\n")
+        click.echo("replaying every recorded path to check it...")
+        checks = claude_explore.verify_paths(ctx, smap)
+        for sid, verdict in checks.items():
+            click.echo(f"  {sid:24} " + click.style(verdict, fg="green" if verdict == "ok" else "red"))
+        bad = [sid for sid, v in checks.items() if v != "ok"]
+        if bad:
+            smap.unreached += [{"screen": sid, "reason": f"recorded path does not replay ({checks[sid]})"} for sid in bad]
+        smap.save(ctx.run_dir / "screen-map.json")
+        smap.save(_map_path(ctx))
     _print_map(smap)
     click.echo("\nattack candidates:")
     for c in scenarios_mod.generate(smap):

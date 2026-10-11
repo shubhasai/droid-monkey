@@ -13,6 +13,7 @@ dependencies = [
     "langchain-anthropic>=1.7.5",
     "langgraph>=1.2.14",
     "langgraph-checkpoint-sqlite>=3.1.1",
+    "mcp>=2.3.0",
     "neatlogs[anthropic,langchain,langgraph]>=1.4.26",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",

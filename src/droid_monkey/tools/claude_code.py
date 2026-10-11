@@ -41,9 +41,12 @@ def run(
     model: str | None = None,
     resume: str | None = None,
     timeout: float = 900,
+    mcp_config: Path | None = None,
 ) -> ClaudeResult:
     cmd = [claude_path(), "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
            "--allowedTools", ",".join(allowed_tools)]
+    if mcp_config:
+        cmd += ["--mcp-config", str(mcp_config), "--strict-mcp-config"]
     if model:
         cmd += ["--model", model]
     if resume:

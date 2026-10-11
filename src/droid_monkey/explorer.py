@@ -42,6 +42,8 @@ class ScreenInfo:
     fields: list[str]
     fingerprint: list[str]
     actions: list[ActionInfo] = field(default_factory=list)
+    description: str = ""
+    files: list[str] = field(default_factory=list)  # source files behind this screen (Claude-driven exploration)
 
     @property
     def has_form(self) -> bool:
@@ -55,6 +57,9 @@ class ScreenMap:
     crashes: list[str] = field(default_factory=list)
     seconds: float = 0.0
     baseline_seconds: float = 0.0
+    edges: list[dict] = field(default_factory=list)      # {"from", "to", "action"}
+    unreached: list[dict] = field(default_factory=list)  # screens known from the code but not reached, and why
+    mode: str = "rules"                                  # rules | claude
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,7 +73,8 @@ class ScreenMap:
             for sid, s in raw["screens"].items()
         }
         return ScreenMap(package=raw["package"], screens=screens, crashes=raw.get("crashes", []),
-                         seconds=raw.get("seconds", 0.0), baseline_seconds=raw.get("baseline_seconds", 0.0))
+                         seconds=raw.get("seconds", 0.0), baseline_seconds=raw.get("baseline_seconds", 0.0),
+                         edges=raw.get("edges", []), unreached=raw.get("unreached", []), mode=raw.get("mode", "rules"))
 
 
 def _similar(a: frozenset[str], b: frozenset[str], threshold: float = 0.6) -> bool:

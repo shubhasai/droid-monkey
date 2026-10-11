@@ -28,6 +28,8 @@ DEFAULT_FILL = [
 FALLBACK_FILL = "Test 123"
 
 PERMISSION_UI = "permissioncontroller"  # com.android.* or com.google.android.* depending on the image
+PERMISSION_DENY_IDS = ["com.android.permissioncontroller:id/permission_deny_button",
+                       "com.android.permissioncontroller:id/permission_deny_and_dont_ask_again_button"]
 PERMISSION_ALLOW_IDS = [
     "com.android.permissioncontroller:id/permission_allow_foreground_only_button",
     "com.android.permissioncontroller:id/permission_allow_button",
@@ -84,8 +86,10 @@ class AppDriver:
             self.fill_form()
 
     def step(self, step: str) -> None:
-        """One step: `tap <selector>`, `tap? <selector>` (if present), `wait <selector>`, `fill`, `back`, `sleep <s>`.
+        """One replayable step.
 
+        `tap <selector>`, `tap? <selector>` (only if present), `wait <selector>`, `type <selector>=<text>`,
+        `scroll down|up`, `fill`, `back`, `allow_permission`, `deny_permission`, `sleep <s>`.
         Selectors: a resource-id, `text:<text>`, `desc:<content-desc>`, or `at:<x>,<y>` for elements with no handle.
         """
         verb, _, arg = step.strip().partition(" ")
@@ -102,6 +106,23 @@ class AppDriver:
         elif verb == "wait":
             if ui.wait_for(self.adb, arg, timeout=12) is None:
                 raise NavigationError(f"step '{step}': '{arg}' never appeared")
+        elif verb == "type":
+            selector, _, text = arg.partition("=")
+            node = ui.wait_for(self.adb, selector, timeout=12)
+            if node is None:
+                raise NavigationError(f"step '{step}': '{selector}' never appeared")
+            ui.tap(self.adb, node)
+            time.sleep(0.3)
+            ui.type_text(self.adb, text)
+            ui.hide_keyboard(self.adb)
+        elif verb == "scroll":
+            self.scroll(arg or "down")
+        elif verb == "allow_permission":
+            if not self.accept_permission_dialog():
+                raise NavigationError("no permission prompt to allow")
+        elif verb == "deny_permission":
+            if not self.press_first(PERMISSION_DENY_IDS):
+                raise NavigationError("no permission prompt to deny")
         elif verb == "fill":
             self.fill_form()
         elif verb == "back":
@@ -178,16 +199,30 @@ class AppDriver:
         return any(PERMISSION_UI in n.package or PERMISSION_UI in n.rid for n in screen.nodes)
 
     def accept_permission_dialog(self, timeout: float = 4.0) -> bool:
+        return self.press_first(PERMISSION_ALLOW_IDS, timeout)
+
+    def press_first(self, ids: list[str], timeout: float = 4.0) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:
             screen = ui.dump(self.adb)
-            for rid in PERMISSION_ALLOW_IDS:
+            for rid in ids:
                 node = screen.find(rid)
                 if node:
                     ui.tap(self.adb, node)
                     return True
             time.sleep(0.3)
         return False
+
+    def scroll(self, direction: str = "down") -> None:
+        """Swipe the screen's main scrollable container (or the middle of the screen if there is none)."""
+        screen = ui.dump(self.adb)
+        box = screen.scrollable(self.package)
+        if box is None:
+            root = max(screen.app_nodes(self.package), key=lambda n: n.area, default=None)
+            if root is None:
+                return
+            box = root
+        ui._swipe(self.adb, box.bounds, up=(direction == "down"))
 
     def crashes(self) -> list[logcat.Crash]:
         return logcat.read_crashes(self.adb, self.package)
