@@ -55,8 +55,7 @@ class AppDriver:
         self.ctx = ctx
         self.adb, self.device, self.cfg = ctx.adb, ctx.device, ctx.cfg
         self.package = ctx.cfg.package
-        self.dir = evidence_dir
-        self.dir.mkdir(parents=True, exist_ok=True)
+        self.dir = evidence_dir  # created on first write, so runs that save nothing leave no empty folders
         self.notes: list[str] = []
 
     # ---- getting somewhere -----------------------------------------------------------------------
@@ -230,6 +229,7 @@ class AppDriver:
     def snapshot(self, label: str) -> ui.Screen:
         """Screen dump and screenshot saved as evidence."""
         screen = ui.dump(self.adb)
+        self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / f"{label}.xml").write_text(screen.xml)
         try:
             (self.dir / f"{label}.png").write_bytes(ui.screenshot(self.adb))

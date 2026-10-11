@@ -23,7 +23,6 @@ from pathlib import Path
 
 import yaml
 
-SPEC_DIR = Path(".droid-monkey") / "attacks"
 
 FAULT_TYPES = ["process_death", "rotation", "network_loss", "permission_revoke", "configuration_change",
                "low_memory", "background"]
@@ -199,7 +198,8 @@ def parse(text: str, known: Known) -> Spec:
 
 
 def spec_dir(app_dir: Path) -> Path:
-    return app_dir / SPEC_DIR
+    from .paths import attacks_dir
+    return attacks_dir(app_dir)
 
 
 def load_all(app_dir: Path, known: Known) -> tuple[dict[str, Spec], dict[str, list[str]]]:

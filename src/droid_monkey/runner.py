@@ -52,6 +52,7 @@ class SpecRunner:
             evidence_dir=str(self.driver.dir), seconds=round(time.time() - start, 1),
         )
         package = self.ctx.cfg.package
+        self.driver.dir.mkdir(parents=True, exist_ok=True)
         if verdict.crash:
             result.exception = verdict.crash.exception
             result.crash_signature = verdict.crash.signature(package)

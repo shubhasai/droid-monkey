@@ -10,14 +10,14 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .paths import DATA_DIR, data_dir, flows_path, profile_path
 from .profile import AppProfile
 from .tools import claude_code
 
-OUT_DIR = ".droid-monkey"
 FAULT_TYPES = ["process_death", "rotation", "network_loss", "permission_revoke", "dark_mode", "font_scale",
                "locale_rtl", "background", "low_memory", "airplane_mode"]
 
-_EXCLUDE_DIRS = {".git", "build", ".gradle", ".idea", ".entire", ".claude", OUT_DIR, "monkey-report", "repro",
+_EXCLUDE_DIRS = {".git", "build", ".gradle", ".idea", ".entire", ".claude", DATA_DIR, "monkey-report", "repro",
                  "docs", "node_modules", "captures"}
 _EXCLUDE_SUFFIXES = {".md", ".txt", ".sh", ".png", ".jpg", ".webp", ".jar", ".apk", ".zip"}
 
@@ -96,9 +96,8 @@ any other file. Keep ANALYSIS.md under 150 lines."""
 
 
 def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5-5") -> AnalysisResult:
-    out_dir = app_dir / OUT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    profile.save(out_dir / "profile.json")
+    out_dir = data_dir(app_dir)
+    profile.save(profile_path(app_dir))
 
     with tempfile.TemporaryDirectory(prefix="droid-monkey-analysis-") as tmp:
         work = Path(tmp)
@@ -110,11 +109,11 @@ def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5
             raise claude_code.ClaudeCodeError(f"analysis did not produce both files: {result.text[:300]}")
         flows = json.loads(fj.read_text())["flows"]
         shutil.copy2(md, out_dir / "ANALYSIS.md")
-        (out_dir / "flows.json").write_text(json.dumps({"flows": flows}, indent=2))
+        flows_path(app_dir).write_text(json.dumps({"flows": flows}, indent=2))
 
     meta = {"session_id": result.session_id, "cost_usd": result.cost_usd, "seconds": result.seconds,
             "turns": result.turns, "model": model, "usage": result.usage}
     (out_dir / "analysis-run.json").write_text(json.dumps(meta, indent=2))
-    return AnalysisResult(out_dir / "ANALYSIS.md", out_dir / "flows.json", flows, result.session_id,
+    return AnalysisResult(out_dir / "ANALYSIS.md", flows_path(app_dir), flows, result.session_id,
                           result.cost_usd, result.seconds)
 

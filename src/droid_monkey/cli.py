@@ -10,6 +10,7 @@ from . import analysis as analysis_mod
 from . import config as config_mod
 from . import profile as profile_mod
 from . import scenarios as scenarios_mod
+from . import paths
 from . import specs as specs_mod
 from .config import Target
 from .driver import Context
@@ -30,19 +31,17 @@ def _context(app_dir: Path, run_id: str) -> Context:
     cfg = config_mod.load(app_dir)
     serial = emulator.running_emulator()
     adb = Adb(serial) if serial else emulator.boot(cfg.avd or emulator.list_avds()[0])
-    run_dir = cfg.app_dir / "monkey-report" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = paths.run_dir(cfg.app_dir, run_id)
     return Context(adb=adb, device=Device(adb, cfg.package), cfg=cfg, run_dir=run_dir)
 
 
 def _map_path(ctx: Context) -> Path:
-    return ctx.cfg.app_dir / "monkey-report" / "screen-map.json"
+    return paths.map_path(ctx.cfg.app_dir)
 
 
 def _explore(ctx: Context) -> ScreenMap:
     explorer = Explorer(ctx)
     smap = explorer.explore()
-    smap.save(ctx.run_dir / "screen-map.json")
     smap.save(_map_path(ctx))
     for note in explorer.notes:
         click.echo(click.style(f"  note: {note}", dim=True))
@@ -138,7 +137,7 @@ def analyze(app_dir: Path, static_only: bool, model: str) -> None:
     for attack, why in prof.applicable_attacks.items():
         click.echo(f"  {attack:18} {why}")
     if static_only:
-        out = cfg.app_dir / analysis_mod.OUT_DIR / "profile.json"
+        out = paths.profile_path(cfg.app_dir)
         prof.save(out)
         click.echo(f"profile: {out}")
         return
@@ -167,8 +166,8 @@ def explore(app_dir: Path, mode: str, model: str) -> None:
         from .designer import load_flows
         prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
         click.echo(f"Claude Code ({model}) is reading the code and driving the app; this takes a while...")
-        res = claude_explore.run(ctx.cfg.app_dir, prof, ctx.run_dir / "screen-map.json",
-                                 load_flows(ctx.cfg.app_dir), model=model)
+        partial = paths.partial_map_path(ctx.cfg.app_dir)
+        res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model)
         smap = res.smap
         click.echo(f"done in {res.seconds:.0f}s, ${res.cost_usd:.2f} of plan usage\n{res.summary[:1500]}\n")
         click.echo("replaying every recorded path to check it...")
@@ -178,8 +177,8 @@ def explore(app_dir: Path, mode: str, model: str) -> None:
         bad = [sid for sid, v in checks.items() if v != "ok"]
         if bad:
             smap.unreached += [{"screen": sid, "reason": f"recorded path does not replay ({checks[sid]})"} for sid in bad]
-        smap.save(ctx.run_dir / "screen-map.json")
-        smap.save(_map_path(ctx))
+        smap.save(_map_path(ctx))  # replaces the previous map only now that the run finished and was checked
+        partial.unlink(missing_ok=True)
     _print_map(smap)
     click.echo("\nattack candidates:")
     for c in scenarios_mod.generate(smap):
@@ -194,7 +193,7 @@ def explore(app_dir: Path, mode: str, model: str) -> None:
 @click.option("--action", help="Trigger step, e.g. 'tap submit_button' (built-in attacks; default: the best candidate's).")
 @click.option("--re-explore", is_flag=True, help="Explore again even if a screen map exists.")
 @click.option("--build/--no-build", default=False, help="Build and install the app first.")
-@click.option("--run-id", default=None, help="Evidence folder name under monkey-report/.")
+@click.option("--run-id", default=None, help="Evidence folder name under .droid-monkey/runs/.")
 def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_explore: bool, build: bool,
            run_id: str | None) -> None:
     """Run an attack: a built-in one, a saved spec by name, `builtin`, `custom` or `all`. No fixing."""
@@ -245,6 +244,7 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
         result = SpecRunner(ctx, spec).run()
         results.append(result)
         _echo_result(attack_name, result)
+    ctx.run_dir.mkdir(parents=True, exist_ok=True)
     (ctx.run_dir / "results.json").write_text(json.dumps([r.__dict__ for r in results], indent=2))
     click.echo(f"evidence: {ctx.run_dir}")
 

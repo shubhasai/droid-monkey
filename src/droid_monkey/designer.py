@@ -276,7 +276,8 @@ def new_goal(prompt: str) -> str:
 
 
 def load_flows(app_dir: Path) -> list[dict]:
-    f = app_dir / ".droid-monkey" / "flows.json"
+    from .paths import flows_path
+    f = flows_path(app_dir)
     return json.loads(f.read_text()).get("flows", []) if f.exists() else []
 
 
