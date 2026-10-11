@@ -14,9 +14,8 @@ import yaml
 
 from . import specs as specs_mod
 from . import tracing
-from .attacks.spec_attack import SpecAttack
-from .attacks.base import Context, NavigationError
-from .config import Scenario
+from .driver import Context, NavigationError
+from .runner import SpecRunner
 from .explorer import ScreenMap
 from .llm import chat_model
 from .profile import AppProfile, source_files
@@ -185,7 +184,7 @@ class Designer:
             return "INVALID (fix before trying):\n- " + "\n- ".join(e.errors)
         record = {"spec": spec.name}
         try:
-            res = SpecAttack(self.ctx, spec).run(Scenario(target=spec.screen))
+            res = SpecRunner(self.ctx, spec).run()
             record.update(outcome=res.outcome, reason=res.reason, exception=res.exception,
                           crash=res.crash_signature, seconds=res.seconds, notes=res.notes[-6:])
             text = (f"outcome: {res.outcome}\nreason: {res.reason}\n"

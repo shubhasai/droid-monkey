@@ -13,11 +13,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .attacks.base import Attack, NavigationError
+from .driver import AppDriver, Context, NavigationError
 from .tools import logcat, ui
 from .tools.adb import AdbError
 
-PERMISSION_UI = "permissioncontroller"
 DIALOG_BUTTONS = ("android:id/button1", "android:id/button2", "android:id/button3")
 
 
@@ -97,14 +96,13 @@ def _group(node: ui.Node) -> str:
     return f"{node.cls}|{x1}|{x2 - x1}|{y2 - y1}"
 
 
-class Explorer(Attack):
-    """Reuses the attack plumbing (navigation, form filling, verified launch) without injecting faults."""
+class Explorer:
+    """Breadth-first exploration through the AppDriver. Injects no faults."""
 
-    name = "explore"
-
-    def __init__(self, ctx, max_screens: int = 12, max_actions: int = 10, budget_seconds: float = 900,
+    def __init__(self, ctx: Context, max_screens: int = 12, max_actions: int = 10, budget_seconds: float = 900,
                  clear_data: bool = True):
-        super().__init__(ctx)
+        self.d = AppDriver(ctx, ctx.run_dir / "explore")
+        self.adb, self.device, self.cfg, self.notes = ctx.adb, ctx.device, ctx.cfg, self.d.notes
         self.max_screens, self.max_actions, self.budget = max_screens, max_actions, budget_seconds
         self.clear_data = clear_data
         self.baseline = 0.0  # how long settle() takes on a screen that is not changing (dump overhead)
@@ -112,23 +110,6 @@ class Explorer(Attack):
         self.started = time.time()
 
     # ---- helpers ---------------------------------------------------------------------------------
-
-    def fresh(self) -> None:
-        self.device.force_stop()
-        self.device.set_rotation(0)
-        logcat.clear(self.adb)
-        self.device.launch()
-        self.device.set_rotation(0)
-        for step in self.cfg.entry_steps:
-            self.step(step)
-
-    def settle(self, timeout: float = 12.0) -> tuple[ui.Screen, float, bool]:
-        return self.settle_screen(timeout)
-
-    @staticmethod
-    def _is_permission_prompt(screen: ui.Screen) -> bool:
-        """The system grant dialog. Its package differs by image (com.android vs com.google.android)."""
-        return any(PERMISSION_UI in n.package or PERMISSION_UI in n.rid for n in screen.nodes)
 
     def clickables(self, screen: ui.Screen) -> list[ui.Node]:
         seen, out = set(), []
@@ -164,12 +145,12 @@ class Explorer(Attack):
         return sid
 
     def go_to(self, info: ScreenInfo) -> ui.Screen:
-        self.fresh()
+        self.d.fresh()
         for step in info.path:
-            self.step(step)
+            self.d.step(step)
         if info.has_form:
-            self.fill_form()
-        screen, _, _ = self.settle()
+            self.d.fill_form()
+        screen, _, _ = self.d.settle()
         if not _similar(screen.fingerprint(self.cfg.package), frozenset(info.fingerprint)):
             raise NavigationError(f"replaying the path did not reach screen {info.id}")
         return screen
@@ -177,11 +158,9 @@ class Explorer(Attack):
     # ---- exploration -----------------------------------------------------------------------------
 
     def explore(self) -> ScreenMap:
-        if self.clear_data:
-            self.device.clear_data()  # first-use state: permission prompts and onboarding show up again
-        self.fresh()
-        self.settle()
-        root, self.baseline, _ = self.settle()  # already idle, so this measures pure dump overhead
+        self.d.fresh(clear_data=self.clear_data)  # first-use state: permission prompts and onboarding show up again
+        self.d.settle()
+        root, self.baseline, _ = self.d.settle()  # already idle, so this measures pure dump overhead
         self.map.baseline_seconds = self.baseline
         queue = [self.register(root, [])]
         explored: set[str] = set()
@@ -226,28 +205,28 @@ class Explorer(Attack):
             return None
         granted_before = self.device.runtime_permissions()
         logcat.clear(self.adb)
-        self.step(f"tap {action.selector}")
-        after, seconds, progress = self.settle()
+        self.d.step(f"tap {action.selector}")
+        after, seconds, progress = self.d.settle()
         action.settle_seconds = round(max(0.0, seconds - self.baseline), 1)  # time beyond dump overhead
         action.showed_progress = progress
 
-        if crashes := self.crashes():
+        if crashes := self.d.crashes():
             action.effect, action.crash = "crash", crashes[0].signature(self.cfg.package)
             self.map.crashes.append(f"{info.id} -> {action.label}: {action.crash}")
             return None
 
-        if self._is_permission_prompt(after):
+        if self.d.is_permission_prompt(after):
             action.effect = "permission"
-            self.accept_permission_dialog()
-            after, _, _ = self.settle()
+            self.d.accept_permission_dialog()
+            after, _, _ = self.d.settle()
             granted = self.device.runtime_permissions()
             action.permissions = [p for p, g in granted.items() if g and not granted_before.get(p)]
             return None
 
         if any(after.find(b) for b in DIALOG_BUTTONS) and not any(screen.find(b) for b in DIALOG_BUTTONS):
             action.effect, action.dialog_dismiss = "dialog", "tap android:id/button1"
-            self.step("tap android:id/button1")
-            after, _, _ = self.settle()
+            self.d.step("tap android:id/button1")
+            after, _, _ = self.d.settle()
 
         if after.foreground_package() not in ("", self.cfg.package):
             action.effect = "left_app"

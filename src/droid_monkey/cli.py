@@ -11,10 +11,10 @@ from . import config as config_mod
 from . import profile as profile_mod
 from . import scenarios as scenarios_mod
 from . import specs as specs_mod
-from .attacks import Context
-from .attacks.spec_attack import SpecAttack
-from .config import Scenario, Target
+from .config import Target
+from .driver import Context
 from .explorer import Explorer, ScreenMap
+from .runner import SpecRunner
 from .tools import emulator, gradle
 from .tools.adb import Adb
 from .tools.device import Device
@@ -204,7 +204,7 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
                 click.echo(f"{attack_name:28} skipped: {e}")
                 continue
             click.echo(click.style(f"{attack_name}: ", bold=True) + best.reason)
-        result = SpecAttack(ctx, spec).run(Scenario(target=spec.screen))
+        result = SpecRunner(ctx, spec).run()
         results.append(result)
         _echo_result(attack_name, result)
     (ctx.run_dir / "results.json").write_text(json.dumps([r.__dict__ for r in results], indent=2))
