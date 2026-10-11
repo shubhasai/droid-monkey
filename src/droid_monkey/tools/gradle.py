@@ -71,5 +71,23 @@ def run_test(app_dir: Path, module: str, variant: str, test_file: Path, timeout:
     start = time.time()
     proc = subprocess.run(["./gradlew", *args, "--console=plain"], cwd=app_dir, capture_output=True, text=True,
                           timeout=timeout)
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-40:])
-    return TestResult(proc.returncode == 0, round(time.time() - start, 1), kind, cls, tail)
+    return TestResult(proc.returncode == 0, round(time.time() - start, 1), kind, cls,
+                      failure_excerpt(proc.stdout + proc.stderr, app_dir, module))
+
+
+_NOISE = ("> Task ", "BUILD ", "Deprecated Gradle", "You can use '--warning-mode", "For more on this",
+          "See https://docs.gradle.org", "actionable task")
+
+
+def failure_excerpt(output: str, app_dir: Path, module: str, limit: int = 60) -> str:
+    """The lines that explain a test failure (assertions, exceptions, compile errors), not the Gradle task list.
+    Falls back to the JUnit XML report when the console only says that tests failed."""
+    lines = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith(_NOISE)]
+    keys = ("FAILED", "Error", "error:", "Exception", "expected", "Expected", "but was", "AssertionError", "e: ", "Caused by")
+    picked = [ln for ln in lines if any(k in ln for k in keys)]
+    for xml in sorted((app_dir / module / "build").glob("**/TEST-*.xml"), key=lambda p: p.stat().st_mtime)[-3:]:
+        text = xml.read_text(errors="replace")
+        if "<failure" in text:
+            start = text.find("<failure")
+            picked.append(text[start:start + 1500])
+    return "\n".join((picked or lines)[-limit:])

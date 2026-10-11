@@ -44,8 +44,18 @@ class RunState(TypedDict, total=False):
     tests: list[str]
     verify: dict
     forced_failure_done: bool
+    first_diagnosis: dict
     outcomes: list[dict]
     log: list[str]
+
+
+def _subject(summary: str, limit: int = 72) -> str:
+    """Commit subject: the summary cut at a word boundary, without a trailing period."""
+    text = " ".join(summary.split()).rstrip(".")
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return cut.rstrip(",;:")
 
 
 class Loop:
@@ -202,7 +212,10 @@ class Loop:
                      asdict(screen) if screen else None, previous=state.get("diagnosis"),
                      failure_note=state.get("failure_note", ""))
         log = self.note(state, f"diagnose: {d.root_cause}\n  files: {d.files_to_change}\n  test: {d.test_plan[:160]}")
-        return {"diagnosis": d.to_dict(), "log": log}
+        out = {"diagnosis": d.to_dict(), "log": log}
+        if not state.get("diagnosis"):  # first diagnosis of this attack
+            out["first_diagnosis"] = {**d.to_dict(), "attack": state["current"]["name"]}
+        return out
 
     def fix(self, state: RunState) -> RunState:
         from . import coder
@@ -242,7 +255,10 @@ class Loop:
 
     def commit(self, state: RunState) -> RunState:
         item, d, res = state["current"], state["diagnosis"], state["result"]
-        message = (f"fix({item['name']}): {d.get('summary', '').rstrip('.')[:60]}\n\n{d['root_cause']}\n\nFix: {d['fix_approach']}\n\n"
+        subject_src = (state.get("first_diagnosis") or d) if state.get("forced_failure_done") and state.get(
+            "first_diagnosis", {}).get("attack") == item["name"] else d
+        subject = _subject(subject_src.get("summary", ""))
+        message = (f"fix({item['name']}): {subject}\n\n{d['root_cause']}\n\nFix: {d['fix_approach']}\n\n"
                    f"Attack: {item['name']}: {res['outcome']} ({res.get('exception') or res['reason']})\n"
                    f"Verified: the identical attack was replayed and survived; regression test {', '.join(state.get('tests', []))} passes.\n"
                    f"droid-monkey run {state['run_id']}")

@@ -35,3 +35,9 @@ def test_moving_to_an_unrecorded_screen_keeps_the_steps_from_the_parent():
     rec.path.append("tap submit")
     rec.set_current(None)  # the new screen is not recorded yet
     assert rec.path_to("form") == ["tap open", "tap submit"]
+
+
+def test_commit_subject_cuts_at_a_word_boundary():
+    from droid_monkey.loop import _subject
+    s = _subject("back checkout fields with plain SavedStateHandle keys, not saveable delegates that write later.")
+    assert len(s) <= 72 and not s.endswith(("savea", ",")) and s.startswith("back checkout fields")
