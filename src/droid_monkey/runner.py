@@ -74,11 +74,13 @@ class SpecRunner:
         start_screen = d.snapshot("before")
 
         before: dict[str, str] = {}
+        fields_screen: frozenset[str] | None = None
         texts_before: set[str] | None = None
         for i, step in enumerate(spec.steps, 1):
             if "fault" in step:
                 if "keeps_fields" in spec.expect and not before:
                     before = d.fields()
+                    fields_screen = ui.dump(d.adb).fingerprint(d.package)
                 if "shows_feedback" in spec.expect and texts_before is None:
                     texts_before = self._visible_texts(ui.dump(d.adb))
                 d.notes.append(f"step {i}: fault {step['fault']}")
@@ -89,11 +91,18 @@ class SpecRunner:
 
         crashes = d.crashes()
         end_screen = d.snapshot("after")
+
+        def same(a: frozenset[str] | None, b: frozenset[str]) -> bool:
+            return not a or len(a & b) / max(1, len(a | b)) >= 0.5
+
+        end_fp = end_screen.fingerprint(d.package)
+        restored = same(start_screen.fingerprint(d.package), end_fp) if "returns_to_screen" in spec.expect else True
+        if before and not crashes and "returns_to_screen" not in spec.expect and not same(fields_screen, end_fp):
+            # The trigger moved the app to another screen (e.g. Save went back to the list): that is navigation,
+            # not lost input, so the fields are not compared.
+            d.notes.append("the app left the form after the trigger; fields not compared")
+            before = {}
         after = d.fields() if (before and not crashes) else {}
-        restored = True
-        if "returns_to_screen" in spec.expect:
-            a, b = start_screen.fingerprint(d.package), end_screen.fingerprint(d.package)
-            restored = not a or len(a & b) / max(1, len(a | b)) >= 0.5
         verdict = classify(crashes, before, after, screen_restored=restored)
 
         if verdict.outcome == SURVIVED and texts_before is not None:

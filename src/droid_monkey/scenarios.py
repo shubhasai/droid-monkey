@@ -36,20 +36,21 @@ def generate(smap: ScreenMap) -> list[Candidate]:
     for s in smap.screens.values():
         depth = len([p for p in s.path if p.startswith("tap")])
 
+        # Forms always come first; path depth only orders the rest (recorded paths can be long, so it is capped).
         if s.has_form:
-            out.append(Candidate("process_death", s.id, None, 0, 10 + len(s.fields),
+            out.append(Candidate("process_death", s.id, None, 0, 100 + len(s.fields),
                                  f"'{s.title}' has {len(s.fields)} input fields that must survive the app being killed"))
         elif depth >= 1:
-            out.append(Candidate("process_death", s.id, None, 0, 2 + depth,
+            out.append(Candidate("process_death", s.id, None, 0, 2 + min(depth, 4),
                                  f"'{s.title}' is {depth} taps deep; the app should return here after being killed"))
 
         if s.has_form:
-            out.append(Candidate("rotation", s.id, None, 0, 5 + len(s.fields),
+            out.append(Candidate("rotation", s.id, None, 0, 50 + len(s.fields),
                                  f"'{s.title}' form must keep {len(s.fields)} fields across recreation"))
         for a in s.actions:
             if a.showed_progress or a.settle_seconds >= 1.5:
                 out.append(Candidate("rotation", s.id, a.selector, a.settle_seconds,
-                                     8 + a.settle_seconds,
+                                     60 + a.settle_seconds,  # in-flight work outranks forms: callbacks into a dead screen
                                      f"'{a.label}' starts {a.settle_seconds:.0f}s of background work; rotating mid-flight "
                                      "recreates the Activity under it"))
 

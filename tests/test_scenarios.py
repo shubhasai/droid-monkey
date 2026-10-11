@@ -66,3 +66,9 @@ def test_rotation_on_a_form_drops_the_trigger_steps():
     form = next(c for c in generate(smap) if c.attack == "rotation" and c.action is None)
     spec = render(builtin_templates()["rotation"], form.values(), known)
     assert [list(s)[0] for s in spec.steps] == ["fill", "fault", "settle"]
+
+
+def test_a_form_outranks_a_deep_screen_for_process_death():
+    smap = sample_map()
+    smap.screens["deep"] = ScreenInfo("deep", ["tap x"] * 13, "Drawer", [], ["drawer"], [])
+    assert best(generate(smap), "process_death").screen == "s2"
