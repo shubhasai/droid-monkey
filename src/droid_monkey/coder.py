@@ -6,6 +6,8 @@ result itself after checking which files changed. A failed fix is retried by res
 """
 
 import json
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,6 +46,7 @@ Evidence: {evidence}
   (instrumented), using only test libraries the project already has (see {module}/build.gradle.kts). It must fail on
   the old code and pass on the fixed code.
 - Do not change build files or add dependencies. Do not touch unrelated code. Do not commit.
+- Before you finish, call the compile tool on your test ('unit' or 'instrumented') and fix every error it reports.
 - When done, reply with one short paragraph: what you changed and the test class name."""
 
 RETRY = """Your fix did not pass verification.
@@ -55,7 +58,8 @@ Root cause: {root_cause}
 Fix approach: {fix_approach}
 Files to change: {files}
 
-Rework the fix (and the test if needed) following the same rules. Do not commit."""
+Rework the fix (and the test if needed) following the same rules, and call the compile tool before you finish.
+Do not commit."""
 
 
 @dataclass
@@ -72,7 +76,8 @@ class CoderResult:
 
 
 def fix(app_dir: Path, module: str, failure: str, diagnosis: Diagnosis, model: str,
-        resume_session: str | None = None, failure_note: str = "") -> CoderResult:
+        resume_session: str | None = None, failure_note: str = "", variant: str = "debug",
+        java_home: str | None = None, compile_tool: bool = True) -> CoderResult:
     if resume_session:
         prompt = RETRY.format(failure_note=failure_note, root_cause=diagnosis.root_cause,
                               fix_approach=diagnosis.fix_approach, files=", ".join(diagnosis.files_to_change))
@@ -83,8 +88,22 @@ def fix(app_dir: Path, module: str, failure: str, diagnosis: Diagnosis, model: s
                               or "Not diagnosed: find the root cause and the files to change yourself.",
                               test_plan=diagnosis.test_plan, module=module)
     before = git.file_states(app_dir)  # anything already changed or untracked is not the coder's to keep or discard
-    res = claude_code.run(prompt, cwd=app_dir, allowed_tools=ALLOWED, model=model, resume=resume_session,
-                          timeout=1200, disallowed_tools=DENIED)
+    with tempfile.TemporaryDirectory(prefix="droid-monkey-coder-") as tmp:
+        mcp_config, allowed = None, list(ALLOWED)
+        if compile_tool:  # the one capability beyond editing: compile, through a fixed command
+            args = ["-m", "droid_monkey.build_mcp", "--app-dir", str(app_dir), "--module", module, "--variant", variant]
+            if java_home:
+                args += ["--java-home", java_home]
+            mcp_config = Path(tmp) / "mcp.json"
+            mcp_config.write_text(json.dumps({"mcpServers": {"build": {"type": "stdio", "command": sys.executable,
+                                                                        "args": args}}}))
+            allowed.append("mcp__build__compile")
+        else:
+            prompt = prompt.replace("- Before you finish, call the compile tool on your test ('unit' or 'instrumented') "
+                                    "and fix every error it reports.\n", "").replace(
+                                    ", and call the compile tool before you finish", "")
+        res = claude_code.run(prompt, cwd=app_dir, allowed_tools=allowed, model=model, resume=resume_session,
+                              timeout=1200, disallowed_tools=DENIED, mcp_config=mcp_config)
     after = git.file_states(app_dir)
     touched = [p for p, h in after.items() if before.get(p) != h]
 
