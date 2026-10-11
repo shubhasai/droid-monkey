@@ -46,9 +46,13 @@ Then answer with ONLY this JSON object, no prose around it:
   "files_to_change": ["repo-relative paths of the source files the fix must edit; as few as possible"],
   "fix_approach": "the idiomatic Android fix in 2-4 sentences (e.g. SavedStateHandle, lifecycle-aware scope,
                    catch and expose an error state, check the permission at use time)",
-  "test_plan": "one regression test that fails before the fix and passes after; prefer a JVM unit test in
-                src/test when the logic allows it (e.g. a ViewModel with SavedStateHandle), otherwise an
-                instrumented test in src/androidTest. Name the test class and what it asserts.",
+  "test_plan": "one regression test that fails before the fix and passes after. Use a JVM unit test in src/test:
+                it is fast and reliable. If the logic is tangled with Android, make the fix extract the decision
+                into testable code (inject a permission checker or a data source, test the ViewModel with a
+                SavedStateHandle, test the state holder) and test that. Use an instrumented test in
+                src/androidTest only when the behaviour cannot exist outside the Android runtime, and never
+                revoke a permission or kill the process inside one (Android kills the test with it).
+                Name the test class and what it asserts.",
   "evidence": ["path/File.kt:line - what it shows"]}}
 
 Readable source files: {files}"""
