@@ -9,6 +9,7 @@ and must revise the hypothesis rather than repeat it.
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 from . import tracing
 from .codetools import CodeTools
@@ -35,17 +36,28 @@ class DiagnosisError(RuntimeError):
 
 
 SYSTEM = """You are the diagnoser inside droid-monkey, which attacks Android apps with real-world faults (process
-death, rotation, network loss, revoked permissions, configuration changes) and then fixes what breaks.
+death, rotation, network loss, revoked permissions, configuration changes, low memory, a loaded CPU) and then fixes
+what breaks.
 
 An attack just failed on the app. Find the root cause in the code: the design mistake that makes the app fail under
 this fault, not just the line that threw. Use the tools to read the code; cite file:line for every claim.
+
+For 'froze' (frames over 700 ms) and 'leaked' (destroyed Activities still alive after a forced GC) there is no stack
+trace: start from the Perfetto analysis. For a freeze, the main thread's state inside the long slice tells you the
+kind of work: 'sleeping/blocked' means a blocking call on the main thread (Thread.sleep, a lock, runBlocking, a
+synchronous network or database call, a binder call), 'running' means heavy computation, 'blocked on I/O' means
+disk access; then find that work in the code behind the slice (input/click handlers, composition, onCreate). For a
+leak, look for what outlives the Activity: static or object fields, singletons, listeners or callbacks registered
+without being unregistered, coroutines or threads capturing a Context, ViewModels holding Views or Activities.
+Use trace_sql for anything the summary does not answer.
 
 Then answer with ONLY this JSON object, no prose around it:
 {{"summary": "imperative one-line fix summary under 60 characters, e.g. 'keep checkout form in SavedStateHandle'",
   "root_cause": "2-4 sentences: what the code does, why it fails under this fault",
   "files_to_change": ["repo-relative paths of the source files the fix must edit; as few as possible"],
   "fix_approach": "the idiomatic Android fix in 2-4 sentences (e.g. SavedStateHandle, lifecycle-aware scope,
-                   catch and expose an error state, check the permission at use time)",
+                   catch and expose an error state, check the permission at use time, move blocking work to
+                   Dispatchers.IO/Default, unregister in onDestroy or use applicationContext / WeakReference)",
   "test_plan": "one regression test that fails before the fix and passes after. Use a JVM unit test in src/test:
                 it is fast and reliable. If the logic is tangled with Android, make the fix extract the decision
                 into testable code (inject a permission checker or a data source, test the ViewModel with a
@@ -67,6 +79,14 @@ def _failure_text(result: dict, spec: dict, screen: dict | None) -> str:
         lines.append("app stack frames:\n  " + "\n  ".join(result.get("app_frames") or []))
     if result.get("lost_fields"):
         lines.append(f"fields lost (before -> after): {result.get('lost_fields')}")
+    metrics = result.get("metrics") or {}
+    if metrics.get("frames"):
+        lines.append(f"frame stats: {metrics['frames']}")
+    if metrics.get("memory_before"):
+        lines.append(f"memory after forced GC: before {metrics['memory_before']}, after {metrics.get('memory_after')}")
+    if metrics.get("trace"):
+        from .tools.perfetto import TraceAnalysis
+        lines.append("Perfetto analysis of the attack:\n" + TraceAnalysis(**metrics["trace"]).summary())
     if screen:
         lines.append(f"attacked screen: {screen.get('id')} '{screen.get('title')}': {screen.get('description', '')}")
         if screen.get("files"):
@@ -97,6 +117,19 @@ def diagnose(app_dir, module: str, llm: LLMConfig, result: dict, spec: dict, scr
                                      description="Entire code graph: ranked symbols for a plain-language query, with "
                                                  "callers/callees signals. Source files only."),
     ]
+    trace = Path(result.get("evidence_dir") or ".") / "trace.perfetto-trace"
+    if result.get("evidence_dir") and trace.exists():
+        from .tools import perfetto
+
+        def trace_sql(sql: str) -> str:
+            return perfetto.query(trace, sql)
+
+        tools.append(StructuredTool.from_function(
+            trace_sql, name="trace_sql",
+            description=f"Read-only SQL on the attack's Perfetto trace (trace_processor tables: process, thread, "
+                        f"thread_state(utid, ts, dur, state, blocked_function), slice(ts, dur, name, depth, track_id), "
+                        f"thread_track(id, utid), counter, process_counter_track). The app is process name "
+                        f"'{result.get('package', '')}' and its main thread has tid = pid. Times are in ns."))
     by_name = {t.name: t for t in tools}
     bound = model.bind_tools(tools)
     ask = _failure_text(result, spec, screen)

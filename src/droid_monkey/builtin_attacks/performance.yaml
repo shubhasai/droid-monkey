@@ -4,6 +4,7 @@ name: performance
 fault_type: performance
 description: Load the CPU like a busy mid-range phone, then scroll the screen and use its slowest action; the UI must never freeze.
 screen: "{screen}"
+trace: true
 steps:
   - fault: cpu_stress
     threads: 4

@@ -1,6 +1,7 @@
 """droid-monkey command line."""
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -217,9 +218,12 @@ def explore(app_dir: Path, mode: str, model: str) -> None:
 @click.option("--re-explore", is_flag=True, help="Explore again even if a screen map exists.")
 @click.option("--build/--no-build", default=False, help="Build and install the app first.")
 @click.option("--run-id", default=None, help="Evidence folder name under .droid-monkey/runs/.")
+@click.option("--diagnose", is_flag=True, help="For each failure, find the root cause and print the suggested fix "
+                                               "with its evidence (no code is changed).")
 def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_explore: bool, build: bool,
-           run_id: str | None) -> None:
+           run_id: str | None, diagnose: bool) -> None:
     """Run an attack: a built-in one, a saved spec by name, `builtin`, `custom` or `all`. No fixing."""
+    best = None
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
     if build:
@@ -267,9 +271,25 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
         result = SpecRunner(ctx, spec).run()
         results.append(result)
         _echo_result(attack_name, result)
+        if diagnose and result.outcome not in ("survived", "skipped"):
+            _suggest_fix(ctx, smap, spec, result, best.reason if attack_name in BUILTIN and best else spec.description)
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
     (ctx.run_dir / "results.json").write_text(json.dumps([r.__dict__ for r in results], indent=2))
     click.echo(f"evidence: {ctx.run_dir}")
+
+
+def _suggest_fix(ctx, smap, spec, result, reason: str) -> None:
+    from dataclasses import asdict
+    from . import approval
+    from .diagnoser import diagnose as run_diagnoser
+    screen = smap.screens.get(spec.screen)
+    click.echo("diagnosing ...")
+    d = run_diagnoser(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, asdict(result), spec.__dict__,
+                      asdict(screen) if screen else None)
+    p = approval.proposal({"name": spec.name, "reason": reason}, asdict(result), d.to_dict())
+    click.echo(approval.render(p).rsplit("\nIf you approve", 1)[0])
+    (Path(result.evidence_dir) / "suggested-fix.json").write_text(json.dumps(p, indent=2))
+    click.echo(f"to apply it: droid-monkey run --attacks {spec.name}")
 
 
 @main.group()
@@ -352,9 +372,21 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
                                                       "demonstrate the retry path.")
 @click.option("--naive", is_flag=True, help="Baseline for comparisons: skip diagnosis, give the coder only the failure.")
 @click.option("--no-compile-tool", is_flag=True, help="Do not give the coder the compile tool (for comparisons).")
+@click.option("--auto-fix", is_flag=True, help="Fix without asking (CI, benchmarks). By default each fix is shown "
+                                                 "with its evidence and suggested change, and waits for your yes.")
 def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None,
-        fail_first_fix: bool, naive: bool, no_compile_tool: bool) -> None:
-    """The full loop: plan, attack, diagnose, fix with Claude Code, verify by replay, commit. Unattended."""
+        fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool) -> None:
+    """The full loop: plan, attack, diagnose, ask you, fix with Claude Code, verify by replay, commit."""
+    from . import approval
+
+    def ask(proposal: dict) -> str:
+        if sys.stdin.isatty():
+            return approval.ask_terminal(proposal)
+        click.echo(approval.render(proposal))
+        click.echo(click.style("not a terminal, so not fixing without approval: rerun with --auto-fix to fix "
+                               "without asking", fg="yellow"))
+        return "no"
+
     from . import loop
     run_id = resume_id or run_id or time.strftime("run-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
@@ -364,11 +396,11 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     names = [n.strip() for n in only.split(",")] if only else None
     final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model,
                      resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix, naive=naive,
-                     compile_tool=not no_compile_tool)
+                     compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask)
     click.echo("")
     for o in final.get("outcomes", []):
         color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow",
-                 "unreachable": "yellow"}.get(o["status"])
+                 "unreachable": "yellow", "declined": "yellow"}.get(o["status"])
         extra = f"  {o['commit'][:8]}" + (f" checkpoint {o['checkpoint']}" if o.get("checkpoint") else "") if o.get("commit") else ""
         click.echo(f"  {o['attack']:28} " + click.style(f"{o['status']:9}", fg=color) + f" was {o['before']}{extra}")
     click.echo(f"branch: {final.get('branch')}   evidence: {ctx.run_dir}")

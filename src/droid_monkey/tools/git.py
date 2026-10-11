@@ -9,7 +9,10 @@ class GitError(RuntimeError):
 
 
 def _git(app_dir: Path, *args: str, check: bool = True, strip: bool = True) -> str:
-    proc = subprocess.run(["git", *args], cwd=app_dir, capture_output=True, text=True, timeout=120)
+    # Detached from the terminal: git hooks (Entire's asks "Link this commit to session context?") must never wait
+    # on a prompt the developer cannot see; without a terminal they take their non-interactive default.
+    proc = subprocess.run(["git", *args], cwd=app_dir, capture_output=True, text=True, timeout=120,
+                          stdin=subprocess.DEVNULL, start_new_session=True)
     if check and proc.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {proc.stderr.strip()[:300]}")
     return proc.stdout.strip() if strip else proc.stdout

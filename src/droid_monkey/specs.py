@@ -89,6 +89,7 @@ class Spec:
     expect: list[str] = field(default_factory=lambda: ["no_crash"])
     flow: str | None = None
     clear_data: bool = False
+    trace: bool = False     # record a Perfetto trace (CPU, threads, memory) while the steps run
     source: str = "manual"  # manual | suggested | prompt
 
     def to_yaml(self) -> str:
@@ -207,6 +208,7 @@ def parse(text: str, known: Known) -> Spec:
         raise SpecError(errors)
     return Spec(name=name, fault_type=raw["fault_type"], description=raw["description"], screen=raw["screen"],
                 steps=steps, expect=list(expect), flow=raw.get("flow"), clear_data=bool(raw.get("clear_data")),
+                trace=bool(raw.get("trace")),
                 source=raw.get("source", "manual"))
 
 
@@ -242,6 +244,8 @@ def catalogue_text() -> str:
     lines.append("Actions (step form: {<name>: <value>}):")
     for name, schema in ACTIONS.items():
         lines.append(f"  - {name}: {schema}")
+    lines.append("Spec options: clear_data: true (start from a fresh install state); trace: true (record a Perfetto "
+                 "trace of CPU, threads and memory during the steps; use it for performance and memory attacks)")
     lines.append("Expectations (expect: [...]):")
     lines += [f"  - {k}: {v}" for k, v in EXPECTATIONS.items()]
     return "\n".join(lines)

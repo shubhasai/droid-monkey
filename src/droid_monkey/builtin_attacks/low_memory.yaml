@@ -4,6 +4,7 @@ name: low_memory
 fault_type: low_memory
 description: Recreate the screen several times, then squeeze memory like a low-RAM phone and come back; destroyed screens must be freed and nothing may crash.
 screen: "{screen}"
+trace: true
 steps:
   - fault: recreate_activity
     times: 3

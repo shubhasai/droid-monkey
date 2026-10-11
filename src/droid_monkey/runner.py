@@ -26,8 +26,9 @@ class AttackResult:
     before_fields: dict[str, str] = field(default_factory=dict)
     after_fields: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
-    metrics: dict[str, dict] = field(default_factory=dict)  # memory / frames before and after, for no_leak and smooth
+    metrics: dict[str, dict] = field(default_factory=dict)  # memory / frames / Perfetto analysis, when measured
     evidence_dir: str = ""
+    package: str = ""
     seconds: float = 0.0
 
 
@@ -51,7 +52,7 @@ class SpecRunner:
             attack=self.spec.name, screen=self.spec.screen, outcome=verdict.outcome, reason=verdict.reason,
             lost_fields={k: list(v) for k, v in verdict.lost_fields.items()},
             before_fields=before, after_fields=after, notes=self.driver.notes, metrics=self.metrics,
-            evidence_dir=str(self.driver.dir), seconds=round(time.time() - start, 1),
+            evidence_dir=str(self.driver.dir), seconds=round(time.time() - start, 1), package=self.ctx.cfg.package,
         )
         package = self.ctx.cfg.package
         self.driver.dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +79,7 @@ class SpecRunner:
             self.metrics["memory_before"] = self.device.memory()
         if "smooth" in spec.expect:
             self.device.reset_frames()  # navigation to the start screen is not judged
+        recording = self._start_trace() if spec.trace else None
 
         before: dict[str, str] = {}
         fields_screen: frozenset[str] | None = None
@@ -95,6 +97,7 @@ class SpecRunner:
                 (key, value), = step.items()
                 self._action(key, value)
 
+        trace_file = self._stop_trace(recording) if recording else None
         crashes = d.crashes()
         end_screen = d.snapshot("after")
 
@@ -118,7 +121,37 @@ class SpecRunner:
             verdict = self._judge_frames() or Verdict(SURVIVED, verdict.reason + ", no frozen frames")
         if verdict.outcome == SURVIVED and "no_leak" in spec.expect:
             verdict = self._judge_memory() or Verdict(SURVIVED, verdict.reason + ", no leaked Activities")
+        if trace_file:
+            self._analyse_trace(trace_file)
         return verdict, before, after
+
+    def _start_trace(self):
+        from .tools import perfetto
+        try:
+            return perfetto.start(self.driver.adb, self.driver.package, self.driver.dir / "perfetto-config.pbtxt")
+        except AdbError as e:  # tracing is evidence, never a reason to fail the attack
+            self.driver.notes.append(f"perfetto: not recorded ({e})")
+            return None
+
+    def _stop_trace(self, recording):
+        try:
+            return recording.stop(self.driver.dir / "trace.perfetto-trace")
+        except AdbError as e:
+            self.driver.notes.append(f"perfetto: trace not saved ({e})")
+            return None
+
+    def _analyse_trace(self, trace_file) -> None:
+        from .tools import perfetto
+        try:
+            analysis = perfetto.analyse(trace_file, self.driver.package)
+        except Exception as e:  # trace_processor missing or the trace unreadable: keep the raw trace
+            self.driver.notes.append(f"perfetto: analysis failed ({str(e)[:200]})")
+            return
+        self.metrics["trace"] = analysis.to_dict()
+        summary = analysis.summary()
+        (self.driver.dir / "trace-analysis.txt").write_text(summary + f"\n\ntrace file: {trace_file}\n"
+                                                            "open it at https://ui.perfetto.dev\n")
+        self.driver.notes.append("perfetto: " + summary.replace("\n", "\n  "))
 
     def _judge_frames(self) -> Verdict | None:
         f = self.metrics["frames"] = self.device.frames()

@@ -1,6 +1,9 @@
 """`droid-monkey run`: the agent loop as a LangGraph graph.
 
-    setup -> plan -> pick -> attack -> decide -> diagnose -> fix -> verify -> commit -> pick ... -> report
+    setup -> plan -> pick -> attack -> decide -> diagnose -> approve -> fix -> verify -> commit -> pick ... -> report
+
+Before the first fix of each attack the run pauses at `approve` (a LangGraph interrupt) with the issue, the measured
+evidence and the suggested fix; the developer answers yes, no or all. `--auto-fix` skips the question.
 
 The model plans the order of attacks and makes the decide step (diagnose or move on; after a failed fix, retry with a
 revised diagnosis or give up). Code enforces the caps, decides every verdict (crash buffer, field diffs, replay of the
@@ -49,6 +52,8 @@ class RunState(TypedDict, total=False):
     coder_tokens: int
     first_diagnosis: dict
     outcomes: list[dict]
+    approval: str
+    auto_fix_all: bool
     log: list[str]
 
 
@@ -64,8 +69,9 @@ def _subject(summary: str, limit: int = 72) -> str:
 class Loop:
     def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
                  only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False,
-                 naive: bool = False, compile_tool: bool = True):
+                 naive: bool = False, compile_tool: bool = True, auto_fix: bool = False):
         self.compile_tool = compile_tool
+        self.auto_fix = auto_fix
         self.ctx, self.cfg, self.smap, self.profile = ctx, ctx.cfg, smap, profile
         self.naive = naive  # baseline for the before/after comparison: no diagnosis, the coder gets only the failure
         self.fail_first_fix = fail_first_fix
@@ -229,6 +235,30 @@ class Loop:
             out["first_diagnosis"] = {**d.to_dict(), "attack": state["current"]["name"]}
         return out
 
+    def approve(self, state: RunState) -> RunState:
+        """Ask the developer before changing their code. Retries of an approved fix are not asked again."""
+        if self.auto_fix or state.get("auto_fix_all") or state.get("attempts", 0) > 0:
+            return {"approval": "yes"}
+        from langgraph.types import interrupt
+        from .approval import proposal
+        answer = interrupt(proposal(state["current"], state["result"], state["diagnosis"] or {}))
+        answer = answer if answer in ("yes", "no", "all") else "no"
+        out: RunState = {"approval": answer, "log": self.note(state, f"approve: {answer} (asked the developer)")}
+        if answer == "all":
+            out["auto_fix_all"] = True
+        return out
+
+    def declined(self, state: RunState) -> RunState:
+        """The developer said no: keep the diagnosis as a suggestion in the report and move on."""
+        from .approval import proposal
+        res = state["result"]
+        outcome = {"attack": state["current"]["name"], "status": "declined", "before": res["outcome"],
+                   "before_detail": res.get("crash_signature") or res["reason"], "diagnosis": state.get("diagnosis"),
+                   "suggestion": proposal(state["current"], res, state.get("diagnosis") or {}),
+                   "metrics": self.metrics(state)}
+        return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1,
+                "log": self.note(state, "declined: suggested fix kept in the report, code unchanged")}
+
     def fix(self, state: RunState) -> RunState:
         from . import coder
         from .diagnoser import Diagnosis
@@ -334,8 +364,8 @@ class Loop:
     def graph(self):
         from langgraph.graph import END, START, StateGraph
         g = StateGraph(RunState)
-        for name in ("setup", "plan", "pick", "attack", "decide", "diagnose", "fix", "verify", "commit", "give_up",
-                     "next_attack", "report"):
+        for name in ("setup", "plan", "pick", "attack", "decide", "diagnose", "approve", "declined", "fix", "verify",
+                     "commit", "give_up", "next_attack", "report"):
             g.add_node(name, getattr(self, name))
         g.add_edge(START, "setup")
         g.add_edge("setup", "plan")
@@ -345,7 +375,10 @@ class Loop:
         g.add_conditional_edges("decide", lambda s: {"diagnose": "diagnose", "retry": "diagnose",
                                                       "give_up": "give_up"}.get(s["decision"], "next_attack"),
                                 ["diagnose", "give_up", "next_attack"])
-        g.add_edge("diagnose", "fix")
+        g.add_edge("diagnose", "approve")
+        g.add_conditional_edges("approve", lambda s: "fix" if s.get("approval") in ("yes", "all") else "declined",
+                                ["fix", "declined"])
+        g.add_edge("declined", "pick")
         g.add_edge("fix", "verify")
         g.add_conditional_edges("verify", lambda s: {"fixed": "commit", "give_up": "give_up"}.get(s["decision"], "decide"),
                                 ["commit", "decide", "give_up"])
@@ -358,14 +391,24 @@ class Loop:
 
 def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
         only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print,
-        fail_first_fix: bool = False, naive: bool = False, compile_tool: bool = True) -> dict:
+        fail_first_fix: bool = False, naive: bool = False, compile_tool: bool = True, auto_fix: bool = False,
+        ask=None) -> dict:
+    """`ask(proposal) -> "yes" | "no" | "all"` answers the approval question; without it nothing is fixed unasked."""
     tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}", f"mode:{'naive' if naive else 'droid-monkey'}"])
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix, naive=naive,
-                compile_tool=compile_tool)
+                compile_tool=compile_tool, auto_fix=auto_fix)
     state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    def until_done(graph, first, config) -> dict:
+        from langgraph.types import Command
+        out = graph.invoke(first, config, durability="sync")
+        while out.get("__interrupt__"):  # paused for approval: ask, then continue from the same node
+            answer = ask(out["__interrupt__"][0].value) if ask else "no"
+            out = graph.invoke(Command(resume=answer), config, durability="sync")
+        return out
 
     @tracing.span(kind="WORKFLOW", name="droid-monkey run", session_id=run_id)
     def go() -> dict:
@@ -378,8 +421,8 @@ def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: 
                 if branch and git.current_branch(ctx.cfg.app_dir) != branch:
                     git.checkout(ctx.cfg.app_dir, branch)
                     echo(f"resume: switched the app repo to {branch}")
-                return graph.invoke(None, config, durability="sync")
-            return graph.invoke({"run_id": run_id, "log": []}, config, durability="sync")
+                return until_done(graph, None, config)
+            return until_done(graph, {"run_id": run_id, "log": []}, config)
 
     final = go()
     tracing.flush()
