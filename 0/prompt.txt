@@ -1,0 +1,9 @@
+improve the ui of the ci tools and make them cool with some monkey reference with proper output also
+
+---
+
+dont add emojis create art with characters
+
+---
+
+enhance the art to multi line above are not look cool

@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4PHMCR87XVEWAX8EVCRKHVZ",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/droid_monkey/approval.py",
+    "src/droid_monkey/cli.py",
+    "src/droid_monkey/theme.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 113162,
+    "cache_read_tokens": 5106155,
+    "output_tokens": 56062,
+    "api_call_count": 46
+  }
+}
