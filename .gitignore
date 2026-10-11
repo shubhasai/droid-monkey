@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# secrets: the API key lives in ~/.droid-monkey/.env, never here
+.env
+.env.*
+
+# run artefacts and local state
+*.sqlite
+*.sqlite-journal
+checkpoints.db*
+.DS_Store
