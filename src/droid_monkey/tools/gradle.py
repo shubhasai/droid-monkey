@@ -59,8 +59,16 @@ def build(app_dir: Path, module: str = "app", variant: str = "debug", timeout: f
     return BuildResult(proc.returncode == 0, time.time() - start, apks[-1] if apks else None, tail)
 
 
-def install(adb: Adb, apk: Path) -> None:
-    out = adb.run("install", "-r", "-t", str(apk), timeout=180)
+def install(adb: Adb, apk: Path, package: str | None = None) -> None:
+    """Install (replace) the APK. On a full device, `install -r` needs room for both copies, so uninstall the old
+    one first and retry: attacks clear app data anyway."""
+    try:
+        out = adb.run("install", "-r", "-t", str(apk), timeout=180)
+    except AdbError as e:
+        if "INSUFFICIENT_STORAGE" not in str(e) or not package:
+            raise
+        adb.run("uninstall", package, check=False, timeout=60)
+        out = adb.run("install", "-t", str(apk), timeout=180)
     if "Success" not in out:
         raise AdbError(f"install failed: {out.strip()[-300:]}")
 

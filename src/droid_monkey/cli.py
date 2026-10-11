@@ -226,7 +226,7 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
         res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
         if not res.ok or not res.apk:
             raise click.ClickException(f"build failed:\n{res.log_tail}")
-        gradle.install(ctx.adb, res.apk)
+        gradle.install(ctx.adb, res.apk, package=ctx.cfg.package)
         click.echo(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
     smap, prof, saved, known = _load_app(ctx, re_explore)
     candidates = scenarios_mod.generate(smap)

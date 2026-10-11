@@ -100,7 +100,7 @@ class Loop:
             self.ctx.adb, self.ctx.device = adb, Device(adb, self.cfg.package)
             build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
             if build.ok and build.apk:
-                gradle.install(adb, build.apk)
+                gradle.install(adb, build.apk, package=self.cfg.package)
             log = log + [f"{time.strftime('%H:%M:%S')} watchdog: emulator back, app reinstalled; retrying {what}"]
             self.echo(log[-1])
             return fn(), log[len(state.get('log', [])):]
@@ -120,7 +120,7 @@ class Loop:
         build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if not build.ok or not build.apk:
             raise RuntimeError(f"the app does not build before any fix:\n{build.log_tail}")
-        gradle.install(self.ctx.adb, build.apk)
+        gradle.install(self.ctx.adb, build.apk, package=self.cfg.package)
         log = self.note(state, f"setup: branch {branch} from {base[:8]}, built and installed in {build.seconds:.0f}s")
         return {"branch": branch, "last_good": base, "index": 0, "outcomes": [], "log": log}
 
@@ -250,8 +250,14 @@ class Loop:
         if not state.get("changed"):
             return {"decision": "verify_failed", "failure_note": "the coder changed no source files",
                     "log": self.note(state, "verify: nothing to verify, the coder changed no files")}
-        v, wlog = self.with_watchdog(state, "verification",
-                                     lambda: verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", [])))
+        from .driver import NavigationError
+        from .tools.adb import AdbError
+        try:
+            v, wlog = self.with_watchdog(state, "verification",
+                                         lambda: verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", [])))
+        except (AdbError, NavigationError) as e:  # the harness failed, not the fix: do not spend a retry on it
+            return {"decision": "give_up", "failure_note": f"verification could not run: {e}",
+                    "log": self.note(state, f"verify: could not run ({str(e)[:200]}); giving up this attack")}
         state = {**state, "log": state.get("log", []) + wlog}
         if v.fixed and self.fail_first_fix and not state.get("forced_failure_done"):
             note = ("FORCED FAILURE (--fail-first-fix, for demonstrating recovery): this verification passed "
@@ -290,7 +296,7 @@ class Loop:
         git.reset_hard(self.cfg.app_dir, state["last_good"])
         build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if build.ok and build.apk:
-            gradle.install(self.ctx.adb, build.apk)
+            gradle.install(self.ctx.adb, build.apk, package=self.cfg.package)
         res = state["result"]
         outcome = {"attack": state["current"]["name"], "status": "unfixed", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "attempts": state.get("attempts", 0),
@@ -341,7 +347,8 @@ class Loop:
                                 ["diagnose", "give_up", "next_attack"])
         g.add_edge("diagnose", "fix")
         g.add_edge("fix", "verify")
-        g.add_conditional_edges("verify", lambda s: "commit" if s["decision"] == "fixed" else "decide", ["commit", "decide"])
+        g.add_conditional_edges("verify", lambda s: {"fixed": "commit", "give_up": "give_up"}.get(s["decision"], "decide"),
+                                ["commit", "decide", "give_up"])
         g.add_edge("commit", "pick")
         g.add_edge("give_up", "pick")
         g.add_edge("next_attack", "pick")
