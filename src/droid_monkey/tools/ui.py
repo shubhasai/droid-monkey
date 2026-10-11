@@ -178,19 +178,24 @@ def collect_fields(adb: Adb, package: str, max_pages: int = 6) -> dict[str, str]
     screen = dump(adb)
     scroller = screen.scrollable(package)
     values: dict[str, str] = {}
-    unnamed = 0
+    seen_unnamed: list[tuple[int, str]] = []  # (absolute position in the scrolled form, text) of id-less fields
 
     def record(s: Screen) -> bool:
-        nonlocal unnamed
         added = False
         for node in s.editable_fields(package):
-            key = node.rid
-            if not key:
-                key = _field_key(node, unnamed)
-                unnamed += 1
-            if key not in values:
-                values[key] = node.text
-                added = True
+            if node.rid:
+                if node.rid not in values:
+                    values[node.rid] = node.text
+                    added = True
+                continue
+            # Id-less fields: the same field seen again after a scroll has the same text, so identify by text
+            # and order; new ones get the next index (EditText#0, #1, ...).
+            sig = (len(seen_unnamed), node.text)
+            if any(t == node.text for _, t in seen_unnamed) and node.text:
+                continue
+            seen_unnamed.append(sig)
+            values[_field_key(node, len(seen_unnamed) - 1)] = node.text
+            added = True
         return added
 
     if scroller is None:

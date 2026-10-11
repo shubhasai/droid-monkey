@@ -144,22 +144,30 @@ class AppDriver:
                 return value
         return FALLBACK_FILL
 
+    EDIT_SUFFIX = " edited"
+
     def fill_form(self, max_pages: int = 6) -> None:
-        """Type a sample value into every empty editable field, scrolling as needed. Works without test tags."""
+        """Make the user's unsaved input: type a sample value into every empty field, and append to every field
+        that is already filled (e.g. an edit form loaded from storage), so the attack tests unsaved changes rather
+        than data the app simply reloads. Scrolls as needed; works without test tags."""
         done: set = set()
         for _ in range(max_pages):
             progressed = False
             while True:
                 screen = ui.dump(self.adb)
-                pending = [n for n in screen.editable_fields(self.package)
-                           if (n.rid or n.bounds) not in done and not n.text]
+                fields = screen.editable_fields(self.package)
+                pending = [n for n in fields if (n.rid or n.bounds) not in done]
                 visible = [n for n in pending if n.bounds[1] >= 0 and n.bounds[3] > n.bounds[1] + 20]
                 if not visible:
                     break
                 node = visible[0]
                 ui.tap(self.adb, node)
                 time.sleep(0.3)
-                ui.type_text(self.adb, self.fill_value(node.rid or node.cls))
+                if node.text:
+                    self.adb.shell("input keyevent 123")  # KEYCODE_MOVE_END: append to the existing value
+                    ui.type_text(self.adb, self.EDIT_SUFFIX)
+                else:
+                    ui.type_text(self.adb, self.fill_value(node.rid or node.cls))
                 ui.hide_keyboard(self.adb)
                 done.add(node.rid or node.bounds)
                 progressed = True
