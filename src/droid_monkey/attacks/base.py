@@ -63,6 +63,7 @@ class Context:
     device: Device
     cfg: AppConfig
     run_dir: Path
+    targets: dict[str, Target] = field(default_factory=dict)  # screens from the explorer's map
 
 
 class Attack:
@@ -107,10 +108,10 @@ class Attack:
     # ---- shared steps ----------------------------------------------------------------------------
 
     def target(self, scenario: Scenario) -> Target:
-        try:
-            return self.cfg.targets[scenario.target]
-        except KeyError:
-            raise NavigationError(f"target '{scenario.target}' is not defined in monkey.yaml") from None
+        found = self.ctx.targets.get(scenario.target) or self.cfg.targets.get(scenario.target)
+        if found is None:
+            raise NavigationError(f"unknown target screen '{scenario.target}': run `droid-monkey explore` first")
+        return found
 
     def prepare(self, scenario: Scenario, clear_data: bool = False) -> Target:
         """Clean device, fresh process, then walk to the target screen."""
@@ -122,6 +123,8 @@ class Attack:
         logcat.clear(self.adb)
         self.device.launch()
         self.device.set_rotation(0)  # Android 16 may restore the app's last orientation on launch
+        for step in self.cfg.entry_steps:
+            self.step(step)
         target = self.target(scenario)
         self.navigate(target)
         return target
@@ -133,9 +136,15 @@ class Attack:
             self.fill_form()
 
     def step(self, step: str) -> None:
-        """One navigation step: `tap <selector>`, `tap? <selector>` (if present), `wait <selector>`, `back`, `sleep <s>`."""
+        """One step: `tap <selector>`, `tap? <selector>` (if present), `wait <selector>`, `fill`, `back`, `sleep <s>`.
+
+        Selectors: a resource-id, `text:<text>`, `desc:<content-desc>`, or `at:<x>,<y>` for elements with no handle.
+        """
         verb, _, arg = step.strip().partition(" ")
-        if verb in ("tap", "tap?"):
+        if verb in ("tap", "tap?") and arg.startswith("at:"):
+            x, y = arg[3:].split(",")
+            self.adb.shell(f"input tap {x} {y}")
+        elif verb in ("tap", "tap?"):
             node = ui.wait_for(self.adb, arg, timeout=3 if verb == "tap?" else 12)
             if node is None:
                 if verb == "tap?":
@@ -145,6 +154,8 @@ class Attack:
         elif verb == "wait":
             if ui.wait_for(self.adb, arg, timeout=12) is None:
                 raise NavigationError(f"step '{step}': '{arg}' never appeared")
+        elif verb == "fill":
+            self.fill_form()
         elif verb == "back":
             self.adb.shell("input keyevent 4")
         elif verb == "sleep":

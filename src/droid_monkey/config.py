@@ -18,7 +18,7 @@ class Target:
 
 @dataclass
 class Scenario:
-    """Default target and trigger action for one attack. The planner chooses these from Block 3 on."""
+    """Where and how to run one attack: a target screen and an optional trigger step."""
     target: str
     action: str | None = None
     settle_seconds: float = 4.0
@@ -31,9 +31,11 @@ class AppConfig:
     module: str = "app"
     variant: str = "debug"
     avd: str | None = None
+    entry_steps: list[str] = field(default_factory=list)   # optional: e.g. log in with a test account
+    fill_values: dict[str, str] = field(default_factory=dict)  # optional: sample values by field-name keyword
+    # Optional manual overrides. Normally the explorer finds targets and scenarios on its own.
     targets: dict[str, Target] = field(default_factory=dict)
     scenarios: dict[str, Scenario] = field(default_factory=dict)
-    fill_values: dict[str, str] = field(default_factory=dict)
 
 
 def load(app_dir: Path) -> AppConfig:
@@ -52,7 +54,8 @@ def load(app_dir: Path) -> AppConfig:
         module=raw.get("module", "app"),
         variant=raw.get("variant", "debug"),
         avd=raw.get("avd"),
+        entry_steps=list(raw.get("entry_steps") or []),
+        fill_values=dict(raw.get("fill_values") or {}),
         targets=targets,
         scenarios=scenarios,
-        fill_values=dict(raw.get("fill_values") or {}),
     )

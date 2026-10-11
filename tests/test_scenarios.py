@@ -1,0 +1,47 @@
+"""Scenario generation from a screen map: generic rules, no app knowledge."""
+
+from droid_monkey.explorer import ActionInfo, ScreenInfo, ScreenMap
+from droid_monkey.scenarios import best, generate
+
+
+def sample_map() -> ScreenMap:
+    home = ScreenInfo("s0", [], "Home", [], ["list"], [
+        ActionInfo("row_#", "First row", "row_#", effect="new_screen", to_screen="s1", settle_seconds=5, showed_progress=True),
+        ActionInfo("text:Help", "Help", "help", effect="same_screen", settle_seconds=0.1),
+    ])
+    detail = ScreenInfo("s1", ["tap row_1"], "Detail", [], ["title"], [
+        ActionInfo("open_form", "Edit", "open_form", effect="new_screen", to_screen="s2", settle_seconds=0.2),
+    ])
+    form = ScreenInfo("s2", ["tap row_1", "tap open_form"], "Profile", ["name", "email", "phone"], ["name", "email"], [
+        ActionInfo("save", "Save", "save", effect="new_screen", to_screen="s3", settle_seconds=2, showed_progress=True),
+        ActionInfo("avatar", "Photo", "avatar", effect="permission", permissions=["android.permission.CAMERA"]),
+    ])
+    return ScreenMap("com.example", {s.id: s for s in (home, detail, form)})
+
+
+def test_every_attack_gets_a_candidate_with_a_reason():
+    cands = generate(sample_map())
+    for attack in ("process_death", "rotation", "network_loss", "permission_revoke"):
+        c = best(cands, attack)
+        assert c is not None and c.reason, attack
+
+
+def test_best_candidates_follow_the_generic_rules():
+    cands = generate(sample_map())
+    assert best(cands, "process_death").screen == "s2"           # the form has the most to lose
+    assert best(cands, "network_loss").action == "tap save"      # submitting a form with a progress indicator
+    assert best(cands, "permission_revoke").action == "tap avatar"
+    assert best(cands, "rotation").action == "tap row_#"          # longest in-flight work
+
+
+def test_fast_actions_are_not_rotation_or_network_targets():
+    cands = generate(sample_map())
+    assert not any(c.action == "tap text:Help" for c in cands)
+
+
+def test_map_round_trips_through_json(tmp_path):
+    smap = sample_map()
+    smap.save(tmp_path / "map.json")
+    again = ScreenMap.load(tmp_path / "map.json")
+    assert again.screens["s2"].fields == ["name", "email", "phone"]
+    assert again.screens["s2"].actions[1].permissions == ["android.permission.CAMERA"]
