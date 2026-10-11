@@ -52,6 +52,10 @@ class Screen:
                 if node:
                     return node
             return None
+        if selector.startswith("field:"):  # the Nth input field on screen, for fields with no resource id
+            fields = [n for n in self.nodes if n.editable and n.area > 0]
+            i = int(selector[6:])
+            return fields[i] if i < len(fields) else None
         if selector.startswith("text:"):
             want = selector[5:].casefold()
             return next((n for n in self.nodes if n.text.casefold() == want and n.area > 0), None)

@@ -101,3 +101,12 @@ def test_fingerprint_without_ids_tells_screens_apart():
     tasks, new_task = screen("Tasks", "Add task"), screen("New Task", "Save task")
     assert tasks.fingerprint(PKG) != new_task.fingerprint(PKG)
     assert tasks.fingerprint(PKG) == screen("Tasks", "Add task").fingerprint(PKG)
+
+
+def test_fields_without_ids_are_selected_by_position_not_value():
+    from droid_monkey.explorer import _selector
+    xml = _no_ids((FIX / "checkout_filled.xml").read_text())
+    screen = ui.parse(xml)
+    second = screen.editable_fields(app_pkg(xml))[1]
+    assert _selector(second, screen) == "field:1"
+    assert screen.find("field:1") == second

@@ -32,15 +32,17 @@ Work in this order:
 1. Read the code first: find the launcher activity and how navigation works (nav graph, routes, fragments,
    activities, screen composables, deep links). Make a checklist of every screen, and for each the files that
    implement it: the screen itself, its ViewModel or presenter, and the repositories or services it calls.
-2. Call launch_fresh(clear_data=true) once to start from a first-time user state.
+2. Call launch_fresh to start. It always clears the app's data, so every recorded path starts from a first-time
+   user and replays on its own: when a screen needs data (an item to open, a task to edit), create it on the way
+   there after each launch_fresh.
 3. Breadth-first: on each new screen, call record_screen with a short name, one sentence on its purpose, and its
    files from your checklist (paths relative to the repo root). Then try every distinct interactive element on it.
    Treat repeated list rows as one unless the code shows they open different screens.
 4. Reach each screen with every state that changes where you can go: fill forms with values that pass the app's
    validation (read the validation code), open menus, dialogs and tabs, scroll lists to find items below the fold,
    and answer permission prompts (allow, and where it matters also deny). Do not enumerate every order of taps.
-5. When a branch is done or the app crashes, use launch_fresh (without clearing data) and navigate to the next
-   unexplored screen. Use graph_status to see untried elements.
+5. When a branch is done or the app crashes, use launch_fresh and navigate to the next unexplored screen,
+   recreating any data it needs. Use graph_status to see untried elements.
 6. Stop when every screen in your checklist is reached or you know why it cannot be (login wall, needs real
    payment, needs a notification or deep link you cannot trigger, debug-only). Then call finish with the
    unreached screens as 'Name: reason' and short notes.
@@ -108,7 +110,7 @@ def verify_paths(ctx: Context, smap: ScreenMap) -> dict[str, str]:
     results: dict[str, str] = {}
     for sid, info in smap.screens.items():
         try:
-            driver.fresh()
+            driver.fresh(clear_data=True)
             driver.go_to(Target(name=sid, steps=list(info.path)))
             screen, _, _ = driver.settle()
             ok = _similar(screen.fingerprint(smap.package), frozenset(info.fingerprint))

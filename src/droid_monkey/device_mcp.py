@@ -143,8 +143,9 @@ class GraphRecorder:
 
     # ---- tools -----------------------------------------------------------------------------------
 
-    def launch_fresh(self, clear_data: bool = False) -> str:
-        self.d.fresh(clear_data=clear_data)
+    def launch_fresh(self, clear_data: bool = True) -> str:
+        # Always from cleared app data: a recorded path must not depend on data created earlier in the session.
+        self.d.fresh(clear_data=True)
         self.path, self.pending, self.awaiting_permission = [], None, None
         self.detours, self.arrival, self.current = set(), {}, None
         if not self.baseline:
@@ -152,7 +153,7 @@ class GraphRecorder:
             _, self.baseline, _ = self.d.settle()  # idle screen: measures pure screen-read overhead
         screen, _, _ = self.d.settle()
         self.set_current(self.match(screen))
-        return self.describe(screen, "fresh launch" + (" (app data cleared)" if clear_data else ""))
+        return self.describe(screen, "fresh launch (app data cleared)")
 
     def screen(self) -> str:
         s = ui.dump(self.ctx.adb)
@@ -209,8 +210,9 @@ class GraphRecorder:
 
     def type_text(self, target: str, text: str) -> str:
         node = self.resolve(target)
-        self.run_step(f"type {_selector(node)}={text}")
-        return self.describe(ui.dump(self.ctx.adb), f"typed into {_selector(node)!r}")
+        sel = _selector(node, ui.dump(self.ctx.adb))
+        self.run_step(f"type {sel}={text}")
+        return self.describe(ui.dump(self.ctx.adb), f"typed into {sel!r}")
 
     def scroll(self, direction: str = "down") -> str:
         self.run_step(f"scroll {'up' if direction == 'up' else 'down'}")
@@ -318,10 +320,11 @@ def serve(app_dir: Path, source_dir: Path, out: Path) -> None:
         inner.__name__, inner.__doc__ = fn.__name__, fn.__doc__
         return inner
 
-    @server.tool(description="Force-stop and relaunch the app like a launcher tap (optionally clearing its data). "
-                             "Resets the path. Returns the screen with numbered elements.")
-    def launch_fresh(clear_data: bool = False) -> str:
-        return safe(rec.launch_fresh)(clear_data)
+    @server.tool(description="Force-stop the app, clear its data and relaunch it like a launcher tap. Resets the "
+                             "path; anything a screen needs (e.g. an item to open) must be created again on the way. "
+                             "Returns the screen with numbered elements.")
+    def launch_fresh() -> str:
+        return safe(rec.launch_fresh)()
 
     @server.tool(description="Describe the current screen: numbered interactive elements, values, visible text, "
                              "and whether it is already recorded.")

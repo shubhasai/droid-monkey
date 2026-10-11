@@ -83,9 +83,13 @@ def _similar(a: frozenset[str], b: frozenset[str], threshold: float = 0.6) -> bo
     return len(a & b) / max(1, len(a | b)) >= threshold
 
 
-def _selector(node: ui.Node) -> str:
+def _selector(node: ui.Node, screen: ui.Screen | None = None) -> str:
     if node.rid:
         return node.rid
+    if node.editable and screen is not None:  # an input's text is its value, which changes: use its position
+        fields = [n for n in screen.nodes if n.editable and n.area > 0]
+        if node in fields:
+            return f"field:{fields.index(node)}"
     if node.text:
         return f"text:{node.text}"
     if node.desc:
@@ -151,7 +155,7 @@ class Explorer:
         return sid
 
     def go_to(self, info: ScreenInfo) -> ui.Screen:
-        self.d.fresh()
+        self.d.fresh(clear_data=True)  # paths are recorded from a clean data state
         for step in info.path:
             self.d.step(step)
         if info.has_form:

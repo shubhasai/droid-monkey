@@ -69,7 +69,7 @@ class SpecRunner:
     def _execute(self) -> tuple[Verdict, dict[str, str], dict[str, str]]:
         d, spec = self.driver, self.spec
         self.device.restore()
-        d.fresh(clear_data=spec.clear_data)
+        d.fresh(clear_data=True)  # same clean data state the screen's path was recorded from
         d.go_to(self._start_screen())
         start_screen = d.snapshot("before")
 
