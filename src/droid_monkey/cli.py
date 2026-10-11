@@ -389,6 +389,9 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
         fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool) -> None:
     """The full loop: plan, attack, diagnose, ask you, fix with Claude Code, verify by replay, commit."""
     from . import approval
+    if auto_fix:
+        click.echo(click.style("--auto-fix: droid-monkey will change code on its run branch without asking you first",
+                               fg="yellow"))
 
     def ask(proposal: dict) -> str:
         if sys.stdin.isatty():

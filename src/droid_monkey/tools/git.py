@@ -66,6 +66,14 @@ def start_run_branch(app_dir: Path, name: str, module: str) -> str:
     return head(app_dir)
 
 
+def rev(app_dir: Path, ref: str) -> str:
+    return _git(app_dir, "rev-parse", ref)
+
+
+def delete_branch(app_dir: Path, branch: str) -> None:
+    _git(app_dir, "branch", "-D", branch)
+
+
 def checkout(app_dir: Path, branch: str) -> None:
     """Switch branches, carrying uncommitted edits along (git refuses if they would conflict)."""
     _git(app_dir, "checkout", branch)

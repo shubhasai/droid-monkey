@@ -50,6 +50,11 @@ def render(p: dict) -> str:
     h = lambda t: click.style(t, bold=True)
     lines = ["", click.style(f"── {p['attack']}: {p['outcome']} ", fg="red", bold=True) + "─" * 40,
              f"{h('Issue:')} {p['detail']}"]
+    if p.get("retry"):
+        r = p["retry"]
+        lines.append(click.style(f"Retry {r['attempt']} of {r['max']}: ", fg="yellow", bold=True)
+                     + f"the previous fix failed verification: {r['previous_failed']}")
+        lines.append("  The diagnosis below is revised. Saying no restores the code to the last good commit.")
     if p.get("why"):
         lines.append(f"{h('Why this attack:')} {p['why']}")
     if p["evidence"]:

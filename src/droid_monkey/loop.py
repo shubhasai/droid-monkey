@@ -54,6 +54,8 @@ class RunState(TypedDict, total=False):
     outcomes: list[dict]
     approval: str
     auto_fix_all: bool
+    home_branch: str           # the branch the developer was on; the run returns there at the end
+    base: str
     log: list[str]
 
 
@@ -122,13 +124,15 @@ class Loop:
 
     def setup(self, state: RunState) -> RunState:
         branch = f"droid-monkey/{state['run_id']}"
+        home = git.current_branch(self.cfg.app_dir)
         base = git.start_run_branch(self.cfg.app_dir, branch, self.cfg.module)
         build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if not build.ok or not build.apk:
             raise RuntimeError(f"the app does not build before any fix:\n{build.log_tail}")
         gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
         log = self.note(state, f"setup: branch {branch} from {base[:8]}, built and installed in {build.seconds:.0f}s")
-        return {"branch": branch, "last_good": base, "index": 0, "outcomes": [], "log": log}
+        return {"branch": branch, "home_branch": home, "base": base, "last_good": base, "index": 0, "outcomes": [],
+                "log": log}
 
     def plan(self, state: RunState) -> RunState:
         candidates = scenarios_mod.generate(self.smap)
@@ -236,12 +240,17 @@ class Loop:
         return out
 
     def approve(self, state: RunState) -> RunState:
-        """Ask the developer before changing their code. Retries of an approved fix are not asked again."""
-        if self.auto_fix or state.get("auto_fix_all") or state.get("attempts", 0) > 0:
+        """Ask the developer before every attempt to change their code, including a retry with a revised diagnosis.
+        Only --auto-fix or an earlier 'all' answer skips the question."""
+        if self.auto_fix or state.get("auto_fix_all"):
             return {"approval": "yes"}
         from langgraph.types import interrupt
         from .approval import proposal
-        answer = interrupt(proposal(state["current"], state["result"], state["diagnosis"] or {}))
+        p = proposal(state["current"], state["result"], state["diagnosis"] or {})
+        if state.get("attempts", 0) > 0:
+            p["retry"] = {"attempt": state["attempts"] + 1, "max": MAX_FIX_ATTEMPTS,
+                          "previous_failed": state.get("failure_note", "")[:600]}
+        answer = interrupt(p)
         answer = answer if answer in ("yes", "no", "all") else "no"
         out: RunState = {"approval": answer, "log": self.note(state, f"approve: {answer} (asked the developer)")}
         if answer == "all":
@@ -249,8 +258,11 @@ class Loop:
         return out
 
     def declined(self, state: RunState) -> RunState:
-        """The developer said no: keep the diagnosis as a suggestion in the report and move on."""
+        """The developer said no: keep the diagnosis as a suggestion in the report and move on. If an earlier attempt
+        of this attack left edits (a declined retry), the sources go back to the last good commit."""
         from .approval import proposal
+        if state.get("attempts", 0) > 0:
+            self._restore_last_good(state)
         res = state["result"]
         outcome = {"attack": state["current"]["name"], "status": "declined", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "diagnosis": state.get("diagnosis"),
@@ -322,11 +334,7 @@ class Loop:
 
     def give_up(self, state: RunState) -> RunState:
         """Restore the sources to the last good commit and record the attack as unfixed."""
-        git.discard(self.cfg.app_dir, git.dirty_paths(self.cfg.app_dir, f"{self.cfg.module}/src"))
-        git.reset_hard(self.cfg.app_dir, state["last_good"])
-        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
-        if build.ok and build.apk:
-            gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
+        self._restore_last_good(state)
         res = state["result"]
         outcome = {"attack": state["current"]["name"], "status": "unfixed", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "attempts": state.get("attempts", 0),
@@ -334,6 +342,13 @@ class Loop:
                    "metrics": self.metrics(state)}
         return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1,
                 "log": self.note(state, f"give up: sources restored to {state['last_good'][:8]}")}
+
+    def _restore_last_good(self, state: RunState) -> None:
+        git.discard(self.cfg.app_dir, git.dirty_paths(self.cfg.app_dir, f"{self.cfg.module}/src"))
+        git.reset_hard(self.cfg.app_dir, state["last_good"])
+        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
+        if build.ok and build.apk:
+            gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
 
     def next_attack(self, state: RunState) -> RunState:
         res = state["result"]
@@ -357,7 +372,21 @@ class Loop:
             "outcomes": state.get("outcomes", [])}, indent=2))
         (out / "log.txt").write_text("\n".join(state.get("log", [])))
         fixed = sum(1 for o in state.get("outcomes", []) if o["status"] == "fixed")
-        return {"log": self.note(state, f"\nreport: {fixed} fixed of {len(state.get('outcomes', []))} attacks -> {out}")}
+        log = self.note(state, f"\nreport: {fixed} fixed of {len(state.get('outcomes', []))} attacks -> {out}")
+        return {"log": log + self._go_home(state)}
+
+    def _go_home(self, state: RunState) -> list[str]:
+        """Leave the developer on the branch they started from. Fixes stay on the run branch for review and `pr`;
+        a run branch with no commits is deleted."""
+        home, branch = state.get("home_branch"), state.get("branch")
+        if not home or not branch or home == branch or git.current_branch(self.cfg.app_dir) != branch:
+            return []
+        git.checkout(self.cfg.app_dir, home)
+        if git.head(self.cfg.app_dir) == git.rev(self.cfg.app_dir, branch):
+            git.delete_branch(self.cfg.app_dir, branch)
+            return [self.note(state, f"back on {home}; nothing was committed, so {branch} was removed")[-1]]
+        return [self.note(state, f"back on {home}; the fixes are on {branch} (review it, or open a PR with "
+                                 f"`droid-monkey pr {state['run_id']}`)")[-1]]
 
     # ---- graph -----------------------------------------------------------------------------------
 
