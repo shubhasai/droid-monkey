@@ -1,0 +1,13 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: rotation
+fault_type: rotation
+description: Rotate the device while work started by a tap is still running, or on a filled form.
+screen: "{screen}"
+steps:
+  - fill: true
+  - tap: "{action}"
+  - wait: "{in_flight}"
+  - fault: rotate
+  - settle: "{settle}"
+expect: [no_crash, keeps_fields]

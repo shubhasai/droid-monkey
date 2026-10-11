@@ -15,7 +15,7 @@ from .tools import claude_code
 
 OUT_DIR = ".droid-monkey"
 FAULT_TYPES = ["process_death", "rotation", "network_loss", "permission_revoke", "dark_mode", "font_scale",
-               "locale_rtl", "dont_keep_activities", "low_memory", "airplane_mode"]
+               "locale_rtl", "background", "low_memory", "airplane_mode"]
 
 _EXCLUDE_DIRS = {".git", "build", ".gradle", ".idea", ".entire", ".claude", OUT_DIR, "monkey-report", "repro",
                  "docs", "node_modules", "captures"}

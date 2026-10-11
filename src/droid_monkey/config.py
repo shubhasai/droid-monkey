@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from .llm import LLMConfig
+
 CONFIG_NAME = "monkey.yaml"
 
 
@@ -36,6 +38,7 @@ class AppConfig:
     # Optional manual overrides. Normally the explorer finds targets and scenarios on its own.
     targets: dict[str, Target] = field(default_factory=dict)
     scenarios: dict[str, Scenario] = field(default_factory=dict)
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
 
 def load(app_dir: Path) -> AppConfig:
@@ -58,4 +61,5 @@ def load(app_dir: Path) -> AppConfig:
         fill_values=dict(raw.get("fill_values") or {}),
         targets=targets,
         scenarios=scenarios,
+        llm=LLMConfig.from_dict(raw.get("llm")),
     )

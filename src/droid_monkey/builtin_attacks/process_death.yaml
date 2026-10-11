@@ -1,0 +1,12 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: process_death
+fault_type: process_death
+description: Fill the screen's form, let Android kill the app in the background, then come back to it.
+screen: "{screen}"
+steps:
+  - fill: true
+  - fault: kill_in_background
+  - fault: relaunch
+  - settle: 6
+expect: [no_crash, keeps_fields, returns_to_screen]

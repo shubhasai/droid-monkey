@@ -1,7 +1,7 @@
-"""Attack lifecycle shared by every fault: prepare -> snapshot -> inject -> observe -> restore (always)."""
+"""Shared plumbing for running an attack (and for the explorer): navigation, form filling, settling, evidence, and
+the device restore that always runs, so one attack never poisons the next."""
 
 import json
-import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -103,7 +103,7 @@ class Attack:
         return result
 
     def execute(self, scenario: Scenario) -> tuple[Verdict, dict[str, str], dict[str, str]]:
-        raise NotImplementedError
+        raise NotImplementedError  # SpecAttack implements it
 
     # ---- shared steps ----------------------------------------------------------------------------
 
@@ -163,11 +163,6 @@ class Attack:
         else:
             raise NavigationError(f"unknown step '{step}'")
 
-    def fire(self, action: str | None) -> None:
-        """Perform the scenario's trigger (a step, usually a tap) right before or after the fault."""
-        if action:
-            self.step(action)
-
     def fill_value(self, key: str) -> str:
         k = key.lower()
         for pattern, value in self.cfg.fill_values.items():
@@ -205,6 +200,24 @@ class Attack:
             if ui.dump(self.adb).xml == before and not progressed:
                 break
 
+    def settle_screen(self, timeout: float = 12.0) -> tuple[ui.Screen, float, bool]:
+        """Dump until two consecutive dumps match and no progress indicator shows. Returns (screen, seconds, saw_progress)."""
+        start = time.time()
+        prev = ui.dump(self.adb)
+        saw_progress = self.has_progress(prev)
+        while time.time() - start < timeout:
+            time.sleep(0.3)
+            cur = ui.dump(self.adb)
+            busy = self.has_progress(cur)
+            saw_progress |= busy
+            if cur.xml == prev.xml and not busy:
+                return cur, round(time.time() - start, 1), saw_progress
+            prev = cur
+        return prev, round(time.time() - start, 1), saw_progress
+
+    def has_progress(self, screen: ui.Screen) -> bool:
+        return any("ProgressBar" in n.cls for n in screen.app_nodes(self.cfg.package))
+
     def snapshot(self, label: str) -> ui.Screen:
         screen = ui.dump(self.adb)
         (self.dir / f"{label}.xml").write_text(screen.xml)
@@ -231,7 +244,3 @@ class Attack:
 
     def crashes(self) -> list[logcat.Crash]:
         return logcat.read_crashes(self.adb, self.cfg.package)
-
-    @staticmethod
-    def slug(text: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")

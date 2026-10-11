@@ -1,8 +1,11 @@
-"""Turn a screen map into attack scenarios, with a reason each. The planner reorders these from Block 3 on."""
+"""Turn a screen map into built-in attack candidates, with a reason each, and fill the built-in templates.
+
+The rules are generic: forms and deep screens for process death, in-flight work and forms for rotation, form submits
+and slow actions for network loss, permission-asking actions for permission revoke. The planner reorders them.
+"""
 
 from dataclasses import dataclass
 
-from .config import Target
 from .explorer import ScreenMap
 
 
@@ -11,13 +14,21 @@ class Candidate:
     attack: str
     screen: str
     action: str | None
-    settle_seconds: float
+    work_seconds: float
     score: float
     reason: str
+    permission: str | None = None
 
-    def target(self, smap: ScreenMap) -> Target:
-        info = smap.screens[self.screen]
-        return Target(name=self.screen, steps=list(info.path), fill=info.has_form)
+    def values(self) -> dict:
+        """Placeholder values for this attack's built-in template."""
+        in_flight = round(min(2.0, max(0.3, self.work_seconds / 4)), 1) if self.action else None
+        return {
+            "screen": self.screen,
+            "action": self.action,
+            "permission": self.permission,
+            "in_flight": in_flight,
+            "settle": round(min(30.0, max(4.0, self.work_seconds + 3)), 1),
+        }
 
 
 def generate(smap: ScreenMap) -> list[Candidate]:
@@ -25,40 +36,38 @@ def generate(smap: ScreenMap) -> list[Candidate]:
     for s in smap.screens.values():
         depth = len([p for p in s.path if p.startswith("tap")])
 
-        # Process death: forms first (most to lose), then deep screens (does the app come back here?).
         if s.has_form:
-            out.append(Candidate("process_death", s.id, None, 2, 10 + len(s.fields),
+            out.append(Candidate("process_death", s.id, None, 0, 10 + len(s.fields),
                                  f"'{s.title}' has {len(s.fields)} input fields that must survive the app being killed"))
         elif depth >= 1:
-            out.append(Candidate("process_death", s.id, None, 2, 2 + depth,
+            out.append(Candidate("process_death", s.id, None, 0, 2 + depth,
                                  f"'{s.title}' is {depth} taps deep; the app should return here after being killed"))
 
-        # Rotation: forms (state across recreation) and work started by a tap (callbacks into a dead Activity).
         if s.has_form:
-            out.append(Candidate("rotation", s.id, None, 3, 5 + len(s.fields),
+            out.append(Candidate("rotation", s.id, None, 0, 5 + len(s.fields),
                                  f"'{s.title}' form must keep {len(s.fields)} fields across recreation"))
         for a in s.actions:
             if a.showed_progress or a.settle_seconds >= 1.5:
-                out.append(Candidate("rotation", s.id, f"tap {a.selector}", a.settle_seconds + 2, 8 + a.settle_seconds,
+                out.append(Candidate("rotation", s.id, a.selector, a.settle_seconds,
+                                     8 + a.settle_seconds,
                                      f"'{a.label}' starts {a.settle_seconds:.0f}s of background work; rotating mid-flight "
                                      "recreates the Activity under it"))
 
-        # Network loss: actions on forms (submits) and actions that do slow work.
         for a in s.actions:
             if a.effect in ("crash", "left_app", "permission"):
                 continue
             score = (6 if s.has_form else 0) + (4 if a.showed_progress else 0) + min(a.settle_seconds, 5)
             if score >= 4:
-                out.append(Candidate("network_loss", s.id, f"tap {a.selector}", max(4, a.settle_seconds + 2), score,
+                out.append(Candidate("network_loss", s.id, a.selector, a.settle_seconds, score,
                                      f"'{a.label}' " + ("submits a form" if s.has_form else "does slow work")
                                      + " and may need the network"))
 
-        # Permission revoke: anything that asked for a runtime permission.
         for a in s.actions:
-            if a.effect == "permission":
-                perms = ", ".join(p.rsplit(".", 1)[-1] for p in a.permissions) or "a runtime permission"
-                out.append(Candidate("permission_revoke", s.id, f"tap {a.selector}", 4, 10,
-                                     f"'{a.label}' asks for {perms}; using it again after a revoke must not crash"))
+            if a.effect == "permission" and a.permissions:
+                perm = a.permissions[0]
+                out.append(Candidate("permission_revoke", s.id, a.selector, 1, 10,
+                                     f"'{a.label}' asks for {perm.rsplit('.', 1)[-1]}; using it again after a revoke "
+                                     "must not crash", permission=perm))
 
     return sorted(out, key=lambda c: (c.attack, -c.score))
 

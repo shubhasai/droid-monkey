@@ -1,0 +1,12 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: network_loss
+fault_type: network_loss
+description: Drop the network, then trigger the screen's submit or slow action; the app must not crash or go silent.
+screen: "{screen}"
+steps:
+  - fill: true
+  - fault: network_off
+  - tap: "{action}"
+  - settle: "{settle}"
+expect: [no_crash, keeps_fields, shows_feedback]

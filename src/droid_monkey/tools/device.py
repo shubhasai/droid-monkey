@@ -15,6 +15,7 @@ class Device:
         self._activity: str | None = None
         self._revoked: list[str] = []
         self._initial_rotation: int | None = None
+        self._changed: set[str] = set()  # settings an attack changed, undone by restore()
 
     # ---- app lifecycle -------------------------------------------------------------------------
 
@@ -128,6 +129,45 @@ class Device:
         self.adb.shell(f"pm revoke {self.package} {permission}")
         self._revoked.append(permission)
 
+    # ---- configuration and system faults ---------------------------------------------------------
+
+    def set_airplane(self, on: bool, timeout: float = 15.0) -> None:
+        self.adb.shell(f"cmd connectivity airplane-mode {'enable' if on else 'disable'}")
+        self._changed.add("airplane")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.online() != on:
+                return
+            time.sleep(0.5)
+        if on:
+            raise AdbError("device still online in airplane mode")
+
+    def set_dark_mode(self, on: bool) -> None:
+        self.adb.shell(f"cmd uimode night {'yes' if on else 'no'}")
+        self._changed.add("dark_mode")
+
+    def set_font_scale(self, scale: float) -> None:
+        self.adb.shell(f"settings put system font_scale {scale}")
+        self._changed.add("font_scale")
+
+    def set_app_locale(self, locale: str) -> None:
+        """Per-app language (Android 13+). 'ar', 'he', 'fa' or 'ur' switch the app to right-to-left layout."""
+        self.adb.shell(f"cmd locale set-app-locales {self.package} --locales {locale or '\"\"'}")
+        self._changed.add("locale")
+
+    def trim_memory(self, level: str) -> None:
+        """Send onTrimMemory. Background levels need the app in the background, so it is sent home first."""
+        if not level.startswith("RUNNING"):
+            self.home()
+            time.sleep(1)
+        self.adb.shell(f"am send-trim-memory {self.package} {level}")
+
+    def background(self, seconds: float) -> None:
+        """Leave the app (Home) and come back after `seconds`, without killing it."""
+        self.home()
+        time.sleep(seconds)
+        self.launch()
+
     # ---- restore ---------------------------------------------------------------------------------
 
     def restore(self) -> None:
@@ -144,5 +184,17 @@ class Device:
         for perm in self._revoked:
             self.adb.shell(f"pm grant {self.package} {perm}", check=False)
         self._revoked.clear()
+        undo = {
+            "airplane": lambda: self.adb.shell("cmd connectivity airplane-mode disable"),
+            "dark_mode": lambda: self.adb.shell("cmd uimode night no"),
+            "font_scale": lambda: self.adb.shell("settings put system font_scale 1.0"),
+            "locale": lambda: self.adb.shell(f'cmd locale set-app-locales {self.package} --locales ""'),
+        }
+        for key in sorted(self._changed):
+            try:
+                undo[key]()
+            except AdbError as e:
+                errors.append(f"{key}: {e}")
+        self._changed.clear()
         if errors:
             raise AdbError("restore incomplete: " + "; ".join(errors))

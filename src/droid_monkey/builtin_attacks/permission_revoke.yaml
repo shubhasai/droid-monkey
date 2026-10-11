@@ -1,0 +1,17 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: permission_revoke
+fault_type: permission_revoke
+description: Grant a permission through the app, revoke it the way Settings does, come back and use the feature again.
+screen: "{screen}"
+clear_data: true
+steps:
+  - tap: "{action}"
+  - accept_permission: true
+  - settle: 3
+  - fault: revoke_permission
+    permission: "{permission}"
+  - restart_to_screen: true
+  - tap: "{action}"
+  - settle: "{settle}"
+expect: [no_crash]

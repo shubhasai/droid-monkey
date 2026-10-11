@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from .tools.logcat import Crash
 
 SURVIVED, CRASHED, LOST_STATE, SKIPPED = "survived", "crashed", "lost_state", "skipped"
+NO_FEEDBACK = "no_feedback"  # survived, but the user was shown nothing (silent failure)
 
 
 @dataclass

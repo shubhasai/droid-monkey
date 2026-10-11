@@ -10,14 +10,18 @@ from . import analysis as analysis_mod
 from . import config as config_mod
 from . import profile as profile_mod
 from . import scenarios as scenarios_mod
-from .attacks import CATALOGUE, Context
+from . import specs as specs_mod
+from .attacks import Context
+from .attacks.spec_attack import SpecAttack
 from .config import Scenario, Target
 from .explorer import Explorer, ScreenMap
 from .tools import emulator, gradle
 from .tools.adb import Adb
 from .tools.device import Device
 
-OUTCOME_COLOR = {"survived": "green", "crashed": "red", "lost_state": "yellow", "skipped": "white"}
+BUILTIN = specs_mod.builtin_templates()
+
+OUTCOME_COLOR = {"survived": "green", "crashed": "red", "lost_state": "yellow", "no_feedback": "magenta", "skipped": "white"}
 APP_DIR = click.option("--app-dir", type=click.Path(path_type=Path, file_okay=False), default=".",
                        help="The app's repo (holds monkey.yaml).")
 
@@ -63,6 +67,37 @@ def _print_map(smap: ScreenMap) -> None:
             click.echo(f"      {a.label[:40]:40} {a.effect:12} {' '.join(extra)}")
     for c in smap.crashes:
         click.echo(click.style(f"  crash during exploration: {c}", fg="red"))
+
+
+def _load_app(ctx: Context, re_explore: bool = False):
+    """Screen map (explored if missing), targets, static profile, flows and saved specs for this app."""
+    if re_explore or not _map_path(ctx).exists():
+        click.echo("exploring the app first...")
+        smap = _explore(ctx)
+        _print_map(smap)
+    else:
+        smap = ScreenMap.load(_map_path(ctx))
+    ctx.targets = {sid: Target(name=sid, steps=list(s.path), fill=s.has_form) for sid, s in smap.screens.items()}
+    prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
+    known = specs_mod.Known(
+        screens=set(smap.screens),
+        selectors={a.selector for s in smap.screens.values() for a in s.actions} | {f for s in smap.screens.values() for f in s.fields},
+        permissions=set(prof.dangerous_permissions),
+    )
+    saved, broken = specs_mod.load_all(ctx.cfg.app_dir, known)
+    for fname, errors in broken.items():
+        click.echo(click.style(f"  invalid spec {fname}: {'; '.join(errors)}", fg="red"))
+    return smap, prof, saved, known
+
+
+def _echo_result(name: str, result) -> None:
+    detail = result.exception or result.reason
+    click.echo(f"{name:28} " + click.style(f"{result.outcome:11}", fg=OUTCOME_COLOR.get(result.outcome))
+               + f" {detail}  ({result.seconds:.0f}s)")
+    if result.crash_signature:
+        click.echo(f"{'':28} at {result.crash_signature}")
+    for key, (old, new) in result.lost_fields.items():
+        click.echo(f"{'':28} {key}: {old!r} -> {new!r}")
 
 
 @click.group()
@@ -115,16 +150,16 @@ def explore(app_dir: Path) -> None:
 
 
 @main.command()
-@click.argument("name", type=click.Choice(sorted(CATALOGUE) + ["all"]))
+@click.argument("name")
 @APP_DIR
-@click.option("--target", help="Screen id from the screen map (default: the best candidate for this attack).")
-@click.option("--action", help="Trigger step, e.g. 'tap submit_button' (default: the best candidate's).")
+@click.option("--target", help="Screen id from the screen map (built-in attacks; default: the best candidate).")
+@click.option("--action", help="Trigger step, e.g. 'tap submit_button' (built-in attacks; default: the best candidate's).")
 @click.option("--re-explore", is_flag=True, help="Explore again even if a screen map exists.")
 @click.option("--build/--no-build", default=False, help="Build and install the app first.")
 @click.option("--run-id", default=None, help="Evidence folder name under monkey-report/.")
 def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_explore: bool, build: bool,
            run_id: str | None) -> None:
-    """Run one attack (or all) against the installed app and print the verdict. No fixing."""
+    """Run an attack: a built-in one, a saved spec by name, `builtin`, `custom` or `all`. No fixing."""
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
     if build:
@@ -133,40 +168,114 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
             raise click.ClickException(f"build failed:\n{res.log_tail}")
         gradle.install(ctx.adb, res.apk)
         click.echo(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
-
-    if re_explore or not _map_path(ctx).exists():
-        click.echo("exploring the app first...")
-        smap = _explore(ctx)
-        _print_map(smap)
-    else:
-        smap = ScreenMap.load(_map_path(ctx))
-    ctx.targets = {sid: Target(name=sid, steps=list(s.path), fill=s.has_form) for sid, s in smap.screens.items()}
+    smap, prof, saved, known = _load_app(ctx, re_explore)
     candidates = scenarios_mod.generate(smap)
 
-    names = sorted(CATALOGUE) if name == "all" else [name]
+    if name == "all":
+        names = sorted(BUILTIN) + sorted(saved)
+    elif name == "builtin":
+        names = sorted(BUILTIN)
+    elif name == "custom":
+        names = sorted(saved)
+    elif name in BUILTIN or name in saved:
+        names = [name]
+    else:
+        raise click.ClickException(f"unknown attack {name!r}. Built-in: {sorted(BUILTIN)}; saved specs: {sorted(saved) or 'none'}")
+
     results = []
     for attack_name in names:
-        best = scenarios_mod.best(candidates, attack_name)
-        manual = ctx.cfg.scenarios.get(attack_name)
-        if target:
-            scenario = Scenario(target=target, action=action or None)
-        elif best:
-            scenario = Scenario(target=best.screen, action=best.action if action is None else (action or None),
-                                settle_seconds=best.settle_seconds)
-            click.echo(click.style(f"{attack_name}: ", bold=True) + best.reason)
-        elif manual:
-            scenario = manual
+        if attack_name in saved:
+            spec = saved[attack_name]
+            click.echo(click.style(f"{attack_name}: ", bold=True) + spec.description)
         else:
-            click.echo(f"{attack_name:18} skipped: the explorer found nowhere to apply it")
-            continue
-        result = CATALOGUE[attack_name](ctx).run(scenario)
+            best = scenarios_mod.best(candidates, attack_name)
+            if target:
+                best = scenarios_mod.Candidate(attack_name, target, (action or "").removeprefix("tap ") or None,
+                                               best.work_seconds if best else 2.0, 0, "chosen with --target",
+                                               best.permission if best else None)
+            elif best and action is not None:
+                best.action = action.removeprefix("tap ") or None
+            if best is None:
+                click.echo(f"{attack_name:28} skipped: the explorer found nowhere to apply it")
+                continue
+            try:
+                spec = specs_mod.render(BUILTIN[attack_name], best.values(), known)
+            except specs_mod.SpecError as e:
+                click.echo(f"{attack_name:28} skipped: {e}")
+                continue
+            click.echo(click.style(f"{attack_name}: ", bold=True) + best.reason)
+        result = SpecAttack(ctx, spec).run(Scenario(target=spec.screen))
         results.append(result)
-        detail = result.exception or result.reason
-        click.echo(f"{attack_name:18} " + click.style(f"{result.outcome:10}", fg=OUTCOME_COLOR.get(result.outcome))
-                   + f" {detail}  ({result.seconds:.0f}s)")
-        if result.crash_signature:
-            click.echo(f"{'':18} at {result.crash_signature}")
-        for key, (old, new) in result.lost_fields.items():
-            click.echo(f"{'':18} {key}: {old!r} -> {new!r}")
+        _echo_result(attack_name, result)
     (ctx.run_dir / "results.json").write_text(json.dumps([r.__dict__ for r in results], indent=2))
     click.echo(f"evidence: {ctx.run_dir}")
+
+
+@main.group()
+def attacks() -> None:
+    """Attack types: list, show, and create them with the designer agent."""
+
+
+@attacks.command("list")
+@APP_DIR
+def attacks_list(app_dir: Path) -> None:
+    """Built-in attacks and the app's saved specs."""
+    ctx = _context(app_dir, "attacks-list")
+    _, _, saved, _ = _load_app(ctx)
+    click.echo(click.style(f"built-in ({specs_mod.BUILTIN_DIR})", bold=True))
+    for n, t in BUILTIN.items():
+        click.echo(f"  {n:34} {t['description']}")
+    click.echo(click.style(f"saved specs ({specs_mod.spec_dir(ctx.cfg.app_dir)})", bold=True))
+    for n, sp in saved.items():
+        click.echo(f"  {n:34} [{sp.fault_type}, {sp.source}] {sp.description}")
+    if not saved:
+        click.echo("  none yet: try `droid-monkey attacks suggest` or `droid-monkey attacks new \"...\"`")
+
+
+@attacks.command("show")
+@click.argument("name")
+@APP_DIR
+def attacks_show(name: str, app_dir: Path) -> None:
+    """Print a saved spec."""
+    path = specs_mod.spec_dir(Path(app_dir).resolve()) / f"{name}.yaml"
+    if not path.exists():
+        raise click.ClickException(f"no saved spec {name}")
+    click.echo(path.read_text())
+
+
+def _design(app_dir: Path, goal: str, source: str, try_on_device: bool, max_tries: int) -> None:
+    from .designer import Designer, load_flows
+    ctx = _context(app_dir, time.strftime(f"design-%Y%m%d-%H%M%S"))
+    smap, prof, saved, _ = _load_app(ctx)
+    flows = load_flows(ctx.cfg.app_dir)
+    if not flows:
+        click.echo(click.style("no analysis yet: run `droid-monkey analyze` for better attacks", fg="yellow"))
+    designer = Designer(ctx, smap, prof, flows, saved, allow_try=try_on_device, max_tries=max_tries)
+    click.echo(f"attack designer ({ctx.cfg.llm.provider}/{ctx.cfg.llm.model}) is working...")
+    res = designer.run(goal, source)
+    for t in res.tries:
+        click.echo(f"  tried {t['spec']:30} -> {t.get('outcome')}: {(t.get('exception') or t.get('reason') or '')[:90]}")
+    for p in res.saved:
+        click.echo(click.style(f"  saved {p}", fg="green"))
+    click.echo(f"\n{res.summary}\n")
+    click.echo(f"{res.turns} turns, {res.input_tokens:,} in / {res.output_tokens:,} out tokens, ~${res.cost_usd:.3f}")
+
+
+@attacks.command("suggest")
+@APP_DIR
+@click.option("--count", default=3, show_default=True, help="How many new attack types to design.")
+@click.option("--try/--no-try", "try_on_device", default=True, help="Try each spec on the emulator before saving.")
+def attacks_suggest(app_dir: Path, count: int, try_on_device: bool) -> None:
+    """The designer agent writes new attack types for this app from its analysis and screen map."""
+    from .designer import suggest_goal
+    _design(app_dir, suggest_goal(count), "suggested", try_on_device, max_tries=count * 2 + 1)
+
+
+@attacks.command("new")
+@click.argument("prompt")
+@APP_DIR
+@click.option("--try/--no-try", "try_on_device", default=True, help="Try the spec on the emulator before saving.")
+def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
+    """Describe an attack in plain words; the designer agent turns it into a validated, tested spec."""
+    from .designer import new_goal
+    _design(app_dir, new_goal(prompt), "prompt", try_on_device, max_tries=3)

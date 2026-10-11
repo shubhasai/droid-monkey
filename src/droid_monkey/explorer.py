@@ -19,7 +19,6 @@ from .tools.adb import AdbError
 
 PERMISSION_UI = "permissioncontroller"
 DIALOG_BUTTONS = ("android:id/button1", "android:id/button2", "android:id/button3")
-PROGRESS_CLASSES = ("ProgressBar",)
 
 
 @dataclass
@@ -124,27 +123,12 @@ class Explorer(Attack):
             self.step(step)
 
     def settle(self, timeout: float = 12.0) -> tuple[ui.Screen, float, bool]:
-        """Dump until two consecutive dumps match and no progress indicator is showing."""
-        start = time.time()
-        prev = ui.dump(self.adb)
-        saw_progress = self._has_progress(prev)
-        while time.time() - start < timeout:
-            time.sleep(0.3)
-            cur = ui.dump(self.adb)
-            busy = self._has_progress(cur)
-            saw_progress |= busy
-            if cur.xml == prev.xml and not busy:
-                return cur, round(time.time() - start, 1), saw_progress
-            prev = cur
-        return prev, round(time.time() - start, 1), saw_progress
+        return self.settle_screen(timeout)
 
     @staticmethod
     def _is_permission_prompt(screen: ui.Screen) -> bool:
         """The system grant dialog. Its package differs by image (com.android vs com.google.android)."""
         return any(PERMISSION_UI in n.package or PERMISSION_UI in n.rid for n in screen.nodes)
-
-    def _has_progress(self, screen: ui.Screen) -> bool:
-        return any(any(c in n.cls for c in PROGRESS_CLASSES) for n in screen.app_nodes(self.cfg.package))
 
     def clickables(self, screen: ui.Screen) -> list[ui.Node]:
         seen, out = set(), []
