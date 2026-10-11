@@ -390,6 +390,7 @@ class Loop:
             "mode": "naive" if self.naive else "droid-monkey", "diagnoser_model": self.cfg.llm.model,
             "coder_model": self.coder_model, "coder_agent": self.agent, "coder_compile_tool": self.compile_tool,
             "seconds": round(time.time() - state.get("started", time.time()), 1),
+            "finished": time.strftime("%Y-%m-%d %H:%M"),
             "reasoning": {"model": self.cfg.llm.model, "input_tokens": state.get("reason_in", 0),
                           "output_tokens": state.get("reason_out", 0),
                           "cost_usd": cost_usd(self.cfg.llm.model, state.get("reason_in", 0), state.get("reason_out", 0))},

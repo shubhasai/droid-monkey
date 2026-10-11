@@ -408,7 +408,8 @@ def _attack_dashboard(ctx, run_id: str, results) -> Path:
                          "diagnosis": {k: d[k] for k in ("summary", "root_cause", "fix_approach", "files_to_change",
                                                          "test_plan") if k in d} | {"evidence": d.get("code_evidence", [])}
                          if d else None})
-    summary = {"run_id": run_id, "branch": "(attack only, no fixes)", "outcomes": outcomes, "mode": "attack"}
+    summary = {"run_id": run_id, "branch": "(attack only, no fixes)", "outcomes": outcomes, "mode": "attack",
+               "finished": time.strftime("%Y-%m-%d %H:%M")}
     out = ctx.run_dir / "dashboard.html"
     report_mod.dashboard(summary, ctx.cfg.package, ctx.run_dir, out, ctx.cfg.app_dir)
     return out
