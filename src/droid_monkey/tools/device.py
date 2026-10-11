@@ -157,10 +157,73 @@ class Device:
 
     def trim_memory(self, level: str) -> None:
         """Send onTrimMemory. Background levels need the app in the background, so it is sent home first."""
-        if not level.startswith("RUNNING"):
-            self.home()
+        if level.startswith("RUNNING"):
+            self.adb.shell(f"am send-trim-memory {self.package} {level}")
+            return
+        self.home()
+        for _ in range(10):  # Android refuses a background level until the process has left the foreground
             time.sleep(1)
-        self.adb.shell(f"am send-trim-memory {self.package} {level}")
+            out = self.adb.shell(f"am send-trim-memory {self.package} {level} 2>&1", check=False)
+            if "foreground process" not in out:
+                return
+        raise AdbError(f"{self.package} never left the foreground: trim level {level} was not delivered")
+
+    def recreate_activity(self, times: int) -> None:
+        """Rotate there and back `times` times. Each flip destroys and recreates the Activity, so anything that holds
+        on to an old one piles up; an even number of flips ends in the starting orientation."""
+        for _ in range(times * 2):
+            self.flip_rotation()
+            time.sleep(1.5)
+
+    def cpu_stress(self, threads: int) -> None:
+        """Busy-loop `threads` CPU cores in the background, like other apps working on a mid-range phone."""
+        cores = int(self.adb.shell("nproc", check=False).strip() or 4)
+        threads = max(1, min(threads, cores))
+        for _ in range(threads):
+            self.adb.shell("setsid nohup sh -c 'exec yes > /dev/null' > /dev/null 2>&1 < /dev/null &")
+        self._changed.add("cpu_stress")
+        time.sleep(1)
+        running = int(self.adb.shell("ps -A | grep -cw yes", check=False).strip() or 0)
+        if running < threads:
+            raise AdbError(f"cpu stress: only {running} of {threads} load processes running")
+
+    # ---- measurements ----------------------------------------------------------------------------
+
+    def memory(self) -> dict[str, int]:
+        """Live Activity instances and Java heap (KB) after a forced garbage collection, so only objects something
+        still references are counted. The GC needs a debuggable build, which is what droid-monkey installs."""
+        out = self.adb.shell(f"am dumpheap -g {self.package} /data/local/tmp/droid-monkey.hprof", check=False)
+        gc = "Error" not in out and "not debuggable" not in out
+        time.sleep(2)
+        self.adb.shell("rm -f /data/local/tmp/droid-monkey.hprof", check=False)
+        info = self.adb.shell(f"dumpsys meminfo {self.package}", check=False)
+        activities = re.search(r"Activities:\s+(\d+)", info)
+        heap = re.search(r"Java Heap:\s+(\d+)", info)
+        if not activities or not heap:
+            raise AdbError(f"no memory info for {self.package}: is it running?")
+        return {"activities": int(activities.group(1)), "java_heap_kb": int(heap.group(1)), "gc": int(gc)}
+
+    def reset_frames(self) -> None:
+        self.adb.shell(f"dumpsys gfxinfo {self.package} reset", check=False)
+
+    def frames(self) -> dict[str, float]:
+        """Rendering since the last reset: frozen frames (over 700 ms, the Play vitals threshold), janky share,
+        slow UI-thread frames and the 99th percentile."""
+        out = self.adb.shell(f"dumpsys gfxinfo {self.package}", check=False)
+
+        def num(pattern: str) -> float:
+            m = re.search(pattern, out)
+            return float(m.group(1)) if m else 0.0
+
+        hist = re.search(r"HISTOGRAM:(.*)", out)
+        frozen = 0
+        if hist:
+            for ms, count in re.findall(r"(\d+)ms=(\d+)", hist.group(1)):
+                if int(ms) >= 700:
+                    frozen += int(count)
+        return {"total": num(r"Total frames rendered: (\d+)"), "janky_pct": num(r"Janky frames: \d+ \(([\d.]+)%\)"),
+                "frozen": frozen, "slow_ui_thread": num(r"Number Slow UI thread: (\d+)"),
+                "p99_ms": num(r"99th percentile: (\d+)ms")}
 
     def background(self, seconds: float) -> None:
         """Leave the app (Home) and come back after `seconds`, without killing it."""
@@ -189,6 +252,7 @@ class Device:
             "dark_mode": lambda: self.adb.shell("cmd uimode night no"),
             "font_scale": lambda: self.adb.shell("settings put system font_scale 1.0"),
             "locale": lambda: self.adb.shell(f'cmd locale set-app-locales {self.package} --locales ""'),
+            "cpu_stress": lambda: self.adb.shell("pkill -x yes", check=False),
         }
         for key in sorted(self._changed):
             try:

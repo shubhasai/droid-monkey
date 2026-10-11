@@ -59,3 +59,17 @@ def test_spec_without_a_fault_is_not_an_attack():
 def test_text_and_system_selectors_are_allowed():
     spec = parse(GOOD.replace("tap: row_#", "tap: text:Buy now").replace("  - wait: 1\n", "  - tap: android:id/button1\n"), KNOWN)
     assert spec.steps[0] == {"tap": "text:Buy now"}
+
+
+def test_whole_number_arguments_are_checked():
+    spec = GOOD.replace("  - fault: rotate\n", "  - fault: recreate_activity\n    times: 3\n  - fault: cpu_stress\n    threads: 4\n")
+    assert len(parse(spec, KNOWN).steps) == 5
+    errs = errors(spec.replace("times: 3", "times: 2.5").replace("threads: 4", "threads: 64"))
+    assert any("times: expected a whole number" in e for e in errs)
+    assert any("threads: expected a whole number between 1 and 8" in e for e in errs)
+
+
+def test_scroll_step_and_measured_expectations():
+    spec = parse(GOOD.replace("  - wait: 1\n", "  - scroll: down\n").replace("[no_crash]", "[no_crash, smooth, no_leak]"), KNOWN)
+    assert {"scroll": "down"} in spec.steps and spec.expect == ["no_crash", "smooth", "no_leak"]
+    assert any("scroll" in e for e in errors(GOOD.replace("  - wait: 1\n", "  - scroll: sideways\n")))

@@ -25,11 +25,11 @@ import yaml
 
 
 FAULT_TYPES = ["process_death", "rotation", "network_loss", "permission_revoke", "configuration_change",
-               "low_memory", "background"]
+               "low_memory", "performance", "background"]
 
 TRIM_LEVELS = ["RUNNING_MODERATE", "RUNNING_LOW", "RUNNING_CRITICAL", "HIDDEN", "BACKGROUND", "MODERATE", "COMPLETE"]
 
-# name -> (argument schema, what it does). Schemas: "bool", "float:lo:hi", "choice:a|b", "permission", "locale".
+# name -> (argument schema, what it does). Schemas: "bool", "int:lo:hi", "float:lo:hi", "choice:a|b", "permission", "locale".
 FAULTS: dict[str, tuple[dict[str, str], str]] = {
     "rotate": ({}, "flip portrait/landscape and confirm the display applied it; recreates the Activity"),
     "network_off": ({}, "wifi and mobile data off, confirmed offline"),
@@ -46,6 +46,10 @@ FAULTS: dict[str, tuple[dict[str, str], str]] = {
     # dont_keep_activities is deliberately absent: `settings put global always_finish_activities 1` does not reach
     # ActivityManager at runtime (verified on API 36: the Activity stays STOPPED), so it could not confirm its effect.
     "trim_memory": ({"level": "choice:" + "|".join(TRIM_LEVELS)}, "send onTrimMemory; background levels send the app Home first"),
+    "recreate_activity": ({"times": "int:1:5"}, "rotate there and back N times; each flip destroys and recreates the "
+                          "Activity, so references to old ones pile up as leaks"),
+    "cpu_stress": ({"threads": "int:1:8"}, "busy-loop N CPU cores in the background like a loaded mid-range phone, "
+                   "until the attack ends"),
 }
 
 # Non-fault steps: key -> argument schema.
@@ -55,6 +59,7 @@ ACTIONS: dict[str, str] = {
     "wait": "float:0:30",       # plain sleep, for timing a fault inside in-flight work
     "settle": "float:1:30",     # wait until the screen stops changing, at most this long
     "accept_permission": "bool",  # tap Allow if a system permission prompt is showing
+    "scroll": "choice:down|up",  # swipe the screen's main list once
     "back": "bool",
     "home": "bool",
     "restart_to_screen": "bool",  # fresh launch, then walk back to the spec's start screen (e.g. after a revoke kills the app)
@@ -65,6 +70,9 @@ EXPECTATIONS = {
     "keeps_fields": "every filled field has the same value at the end",
     "returns_to_screen": "the app ends on the screen the attack started from",
     "shows_feedback": "after the trigger the app shows something new (error, retry, message) instead of nothing",
+    "no_leak": "after a forced garbage collection no more Activity instances are alive than at the start, and the "
+               "Java heap did not grow by more than half (and 16 MB)",
+    "smooth": "no frozen frames (one frame taking over 700 ms, the Play vitals threshold) from the first step on",
 }
 
 LOCALES = {"ar", "he", "fa", "ur", "de", "fr", "es", "hi", "ja", "ru", "pt", "en"}
@@ -98,6 +106,11 @@ def _check_arg(schema: str, value, where: str, known: "Known") -> str | None:
     kind, *rest = schema.split(":")
     if kind == "bool":
         return None if isinstance(value, bool) else f"{where}: expected true/false, got {value!r}"
+    if kind == "int":
+        lo, hi = int(rest[0]), int(rest[1])
+        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
+            return f"{where}: expected a whole number between {lo} and {hi}, got {value!r}"
+        return None
     if kind == "float":
         lo, hi = float(rest[0]), float(rest[1])
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not lo <= value <= hi:

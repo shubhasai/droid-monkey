@@ -21,7 +21,7 @@ def sample_map() -> ScreenMap:
 
 def test_every_attack_gets_a_candidate_with_a_reason():
     cands = generate(sample_map())
-    for attack in ("process_death", "rotation", "network_loss", "permission_revoke"):
+    for attack in ("process_death", "rotation", "network_loss", "permission_revoke", "low_memory", "performance"):
         c = best(cands, attack)
         assert c is not None and c.reason, attack
 
@@ -33,6 +33,8 @@ def test_best_candidates_follow_the_generic_rules():
     assert best(cands, "permission_revoke").action == "avatar"
     assert best(cands, "permission_revoke").permission == "android.permission.CAMERA"
     assert best(cands, "rotation").action == "row_#"          # longest in-flight work
+    assert best(cands, "performance").action == "row_#"       # the slowest thing a user can do
+    assert best(cands, "low_memory").screen == "s2"           # deep, busy screen with a form
 
 
 def test_fast_actions_are_not_rotation_or_network_targets():

@@ -1,0 +1,16 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: low_memory
+fault_type: low_memory
+description: Recreate the screen several times, then squeeze memory like a low-RAM phone and come back; destroyed screens must be freed and nothing may crash.
+screen: "{screen}"
+steps:
+  - fault: recreate_activity
+    times: 3
+  - fault: trim_memory
+    level: RUNNING_CRITICAL
+  - fault: trim_memory
+    level: COMPLETE
+  - fault: relaunch
+  - settle: 6
+expect: [no_crash, no_leak]

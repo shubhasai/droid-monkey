@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 
 from .config import Target
 from .driver import AppDriver, Context, NavigationError
-from .observe import NO_FEEDBACK, SURVIVED, Verdict, classify
+from .observe import FROZE, LEAKED, NO_FEEDBACK, SURVIVED, Verdict, classify
 from .specs import Spec
 from .tools import ui
 from .tools.adb import AdbError
@@ -26,6 +26,7 @@ class AttackResult:
     before_fields: dict[str, str] = field(default_factory=dict)
     after_fields: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    metrics: dict[str, dict] = field(default_factory=dict)  # memory / frames before and after, for no_leak and smooth
     evidence_dir: str = ""
     seconds: float = 0.0
 
@@ -39,6 +40,7 @@ class SpecRunner:
     def run(self) -> AttackResult:
         start = time.time()
         try:
+            self.metrics: dict[str, dict] = {}
             verdict, before, after = self._execute()
         finally:
             try:
@@ -48,7 +50,7 @@ class SpecRunner:
         result = AttackResult(
             attack=self.spec.name, screen=self.spec.screen, outcome=verdict.outcome, reason=verdict.reason,
             lost_fields={k: list(v) for k, v in verdict.lost_fields.items()},
-            before_fields=before, after_fields=after, notes=self.driver.notes,
+            before_fields=before, after_fields=after, notes=self.driver.notes, metrics=self.metrics,
             evidence_dir=str(self.driver.dir), seconds=round(time.time() - start, 1),
         )
         package = self.ctx.cfg.package
@@ -72,6 +74,10 @@ class SpecRunner:
         d.fresh(clear_data=True)  # same clean data state the screen's path was recorded from
         d.go_to(self._start_screen())
         start_screen = d.snapshot("before")
+        if "no_leak" in spec.expect:
+            self.metrics["memory_before"] = self.device.memory()
+        if "smooth" in spec.expect:
+            self.device.reset_frames()  # navigation to the start screen is not judged
 
         before: dict[str, str] = {}
         fields_screen: frozenset[str] | None = None
@@ -108,7 +114,36 @@ class SpecRunner:
         if verdict.outcome == SURVIVED and texts_before is not None:
             if not (self._visible_texts(end_screen) - texts_before):
                 verdict = Verdict(NO_FEEDBACK, "after the trigger the app showed nothing new: no error, retry or message")
+        if verdict.outcome == SURVIVED and "smooth" in spec.expect:
+            verdict = self._judge_frames() or Verdict(SURVIVED, verdict.reason + ", no frozen frames")
+        if verdict.outcome == SURVIVED and "no_leak" in spec.expect:
+            verdict = self._judge_memory() or Verdict(SURVIVED, verdict.reason + ", no leaked Activities")
         return verdict, before, after
+
+    def _judge_frames(self) -> Verdict | None:
+        f = self.metrics["frames"] = self.device.frames()
+        self.driver.notes.append(f"frames: {f['total']:.0f} rendered, {f['frozen']} frozen (>700 ms), "
+                                 f"{f['janky_pct']:.0f}% janky, {f['slow_ui_thread']:.0f} slow UI-thread, p99 {f['p99_ms']:.0f} ms")
+        if f["frozen"]:
+            return Verdict(FROZE, f"{f['frozen']} frozen frame(s) over 700 ms and {f['slow_ui_thread']:.0f} slow UI-thread "
+                                  f"frames (p99 {f['p99_ms']:.0f} ms): something blocks the main thread")
+        return None
+
+    def _judge_memory(self) -> Verdict | None:
+        before = self.metrics["memory_before"]
+        after = self.metrics["memory_after"] = self.device.memory()
+        grew = after["java_heap_kb"] - before["java_heap_kb"]
+        self.driver.notes.append(f"memory after GC: {before['activities']} -> {after['activities']} Activities, "
+                                 f"Java heap {before['java_heap_kb'] // 1024} -> {after['java_heap_kb'] // 1024} MB"
+                                 + ("" if after["gc"] else " (GC not forced: build is not debuggable)"))
+        if after["activities"] > before["activities"]:
+            return Verdict(LEAKED, f"{after['activities'] - before['activities']} destroyed Activity instance(s) still alive "
+                                   f"after a forced GC ({before['activities']} -> {after['activities']}): something keeps a "
+                                   "reference to an old Activity")
+        if grew > 16 * 1024 and grew > before["java_heap_kb"] / 2:
+            return Verdict(LEAKED, f"Java heap grew {grew // 1024} MB ({before['java_heap_kb'] // 1024} -> "
+                                   f"{after['java_heap_kb'] // 1024} MB) after a forced GC: memory is not released")
+        return None
 
     def _visible_texts(self, screen: ui.Screen) -> set[str]:
         return {n.text or n.desc for n in screen.app_nodes(self.driver.package) if (n.text or n.desc) and not n.editable}
@@ -127,6 +162,8 @@ class SpecRunner:
             d.accept_permission_dialog()
         elif key == "back" and value:
             d.adb.shell("input keyevent 4")
+        elif key == "scroll":
+            d.scroll(value)
         elif key == "home" and value:
             self.device.home()
         elif key == "restart_to_screen" and value:
@@ -161,5 +198,9 @@ class SpecRunner:
             dev.set_app_locale(step["locale"])
         elif name == "trim_memory":
             dev.trim_memory(step["level"])
+        elif name == "recreate_activity":
+            dev.recreate_activity(int(step["times"]))
+        elif name == "cpu_stress":
+            dev.cpu_stress(int(step["threads"]))
         else:  # the validator makes this unreachable
             raise NavigationError(f"unknown fault {name}")

@@ -1,7 +1,8 @@
 """Turn a screen map into built-in attack candidates, with a reason each, and fill the built-in templates.
 
 The rules are generic: forms and deep screens for process death, in-flight work and forms for rotation, form submits
-and slow actions for network loss, permission-asking actions for permission revoke. The planner reorders them.
+and slow actions for network loss, permission-asking actions for permission revoke, busy and deep screens for
+low memory (leaks), and the slowest action under CPU load for performance. The planner reorders them.
 """
 
 from dataclasses import dataclass
@@ -69,6 +70,21 @@ def generate(smap: ScreenMap) -> list[Candidate]:
                 out.append(Candidate("permission_revoke", s.id, a.selector, 1, 10,
                                      f"'{a.label}' asks for {perm.rsplit('.', 1)[-1]}; using it again after a revoke "
                                      "must not crash", permission=perm))
+
+        # Leaks: screens doing async work hold callbacks that can outlive the Activity; deeper screens hold more.
+        busy = any(a.showed_progress or a.settle_seconds >= 1.5 for a in s.actions)
+        out.append(Candidate("low_memory", s.id, None, 0, 3 + min(depth, 4) + (3 if busy else 0) + (2 if s.has_form else 0),
+                             f"'{s.title}' is recreated 3 times and trimmed; destroyed copies of it must be freed"
+                             + (" (it runs background work that can hold on to them)" if busy else "")))
+
+        # Performance: the slowest thing a user can do on the screen, under CPU load; lists scroll too.
+        usable = [a for a in s.actions if a.effect not in ("crash", "left_app", "permission", "not_found")]
+        slow = max(usable, key=lambda a: (a.showed_progress, a.settle_seconds), default=None)
+        work = slow.settle_seconds if slow else 0
+        out.append(Candidate("performance", s.id, slow.selector if slow else None, work,
+                             1 + min(work, 5) * 2 + (2 if slow and slow.showed_progress else 0) + min(len(s.actions), 10) / 5,
+                             f"'{s.title}': scroll and " + (f"'{slow.label}' ({work:.1f}s of work)" if slow else "idle")
+                             + " under CPU load must not freeze the UI"))
 
     return sorted(out, key=lambda c: (c.attack, -c.score))
 

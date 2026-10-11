@@ -6,6 +6,8 @@ from .tools.logcat import Crash
 
 SURVIVED, CRASHED, LOST_STATE, SKIPPED = "survived", "crashed", "lost_state", "skipped"
 NO_FEEDBACK = "no_feedback"  # survived, but the user was shown nothing (silent failure)
+LEAKED = "leaked"  # survived, but destroyed Activities (or the heap) stayed alive after a forced GC
+FROZE = "froze"    # survived, but the UI froze: frames over 700 ms, usually work on the main thread
 
 
 @dataclass
@@ -32,4 +34,4 @@ def classify(
                        lost_fields=lost)
     if not screen_restored:
         return Verdict(LOST_STATE, "the app came back on a different screen than the user left")
-    return Verdict(SURVIVED, "no crash, no ANR, and every filled field kept its value")
+    return Verdict(SURVIVED, "no crash, no ANR, and every filled field kept its value" if before else "no crash, no ANR")

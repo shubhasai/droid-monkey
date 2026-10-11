@@ -1,0 +1,14 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: performance
+fault_type: performance
+description: Load the CPU like a busy mid-range phone, then scroll the screen and use its slowest action; the UI must never freeze.
+screen: "{screen}"
+steps:
+  - fault: cpu_stress
+    threads: 4
+  - scroll: down
+  - scroll: up
+  - tap: "{action}"
+  - settle: "{settle}"
+expect: [no_crash, smooth]
