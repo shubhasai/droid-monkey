@@ -77,3 +77,27 @@ def test_selector_alternatives_and_case_insensitive_text():
     assert screen.find("android:id/button1|text:ravi kumar") is not None   # first alternative absent, second matches
     assert screen.find("text:RAVI KUMAR") is not None
     assert screen.find("nope|also_nope") is None
+
+
+def _no_ids(xml: str) -> str:
+    return re.sub(r'resource-id="(?!android:)[^"]*"', 'resource-id=""', xml)
+
+
+def test_fingerprint_without_ids_ignores_typed_values():
+    pkg = app_pkg((FIX / "checkout_filled.xml").read_text())
+    filled = ui.parse(_no_ids((FIX / "checkout_filled.xml").read_text()))
+    empty = ui.parse(_no_ids((FIX / "checkout_empty.xml").read_text()))
+    assert filled.fingerprint(pkg) == empty.fingerprint(pkg)
+
+
+def test_fingerprint_without_ids_tells_screens_apart():
+    def screen(title: str, button: str) -> ui.Screen:
+        return ui.parse(
+            '<?xml version="1.0"?><hierarchy rotation="0">'
+            f'<node class="android.view.View" package="{PKG}" resource-id="" text="" content-desc="" bounds="[0,0][1080,2400]" clickable="false" scrollable="false" focused="false">'
+            f'<node class="android.widget.TextView" package="{PKG}" resource-id="" text="{title}" content-desc="" bounds="[0,0][500,100]" clickable="false" scrollable="false" focused="false"/>'
+            f'<node class="android.view.View" package="{PKG}" resource-id="" text="" content-desc="{button}" bounds="[900,2200][1000,2300]" clickable="true" scrollable="false" focused="false"/>'
+            '</node></hierarchy>')
+    tasks, new_task = screen("Tasks", "Add task"), screen("New Task", "Save task")
+    assert tasks.fingerprint(PKG) != new_task.fingerprint(PKG)
+    assert tasks.fingerprint(PKG) == screen("Tasks", "Add task").fingerprint(PKG)

@@ -71,8 +71,23 @@ class Screen:
         return [n for n in self.app_nodes(package) if n.editable and n.area > 0]
 
     def fingerprint(self, package: str) -> frozenset[str]:
-        """Which screen this is: the app's resource ids (or classes), ignoring their text."""
-        return frozenset(n.rid or n.cls for n in self.app_nodes(package))
+        """Which screen this is, from what identifies it to a person: resource ids, content descriptions (icon
+        labels), button texts and short static texts such as the top bar title. Typed field values are ignored,
+        so a filled form and an empty one are the same screen. Apps without test tags have almost no resource
+        ids, and class names alone make every screen look alike, so the labels carry the identity there."""
+        tokens = set()
+        for n in self.app_nodes(package):
+            if n.area == 0:
+                continue
+            if n.rid:
+                tokens.add(f"id:{n.rid}")
+            if n.desc:
+                tokens.add(f"desc:{n.desc[:40]}")
+            if n.editable:
+                tokens.add(f"edit:{n.rid or n.cls}")
+            elif n.text and (n.clickable or len(n.text) <= 30):
+                tokens.add(f"text:{n.text[:30]}")
+        return frozenset(tokens or {n.cls for n in self.app_nodes(package)})
 
     def scrollable(self, package: str) -> Node | None:
         candidates = [n for n in self.app_nodes(package) if n.scrollable]
