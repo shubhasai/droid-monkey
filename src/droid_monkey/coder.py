@@ -65,6 +65,7 @@ class CoderResult:
     session_id: str
     cost_usd: float
     seconds: float
+    tokens: int = 0  # input (incl. cache) + output tokens of the Claude Code session
     changed: list[str] = field(default_factory=list)       # files kept (inside the module's src)
     rejected: list[str] = field(default_factory=list)      # files changed outside the allowed area, discarded
     test_files: list[str] = field(default_factory=list)
@@ -78,7 +79,8 @@ def fix(app_dir: Path, module: str, failure: str, diagnosis: Diagnosis, model: s
     else:
         prompt = BRIEF.format(failure=failure, root_cause=diagnosis.root_cause, fix_approach=diagnosis.fix_approach,
                               evidence="; ".join(diagnosis.evidence) or "-",
-                              files="\n".join(f"- {f}" for f in diagnosis.files_to_change),
+                              files="\n".join(f"- {f}" for f in diagnosis.files_to_change)
+                              or "Not diagnosed: find the root cause and the files to change yourself.",
                               test_plan=diagnosis.test_plan, module=module)
     before = git.file_states(app_dir)  # anything already changed or untracked is not the coder's to keep or discard
     res = claude_code.run(prompt, cwd=app_dir, allowed_tools=ALLOWED, model=model, resume=resume_session,
@@ -94,7 +96,11 @@ def fix(app_dir: Path, module: str, failure: str, diagnosis: Diagnosis, model: s
         git.discard(app_dir, rejected)
     changed = keep
     tests = [p for p in keep if f"{module}/src/test/" in p or f"{module}/src/androidTest/" in p]
-    return CoderResult(res.ok and bool(keep), res.text, res.session_id, res.cost_usd, res.seconds, keep, rejected, tests)
+    u = res.usage or {}
+    tokens = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
+                                                "cache_creation_input_tokens", "output_tokens"))
+    return CoderResult(res.ok and bool(keep), res.text, res.session_id, res.cost_usd, res.seconds, tokens, keep,
+                       rejected, tests)
 
 
 def failure_text(result: dict, spec: dict) -> str:

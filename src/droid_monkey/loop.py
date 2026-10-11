@@ -44,6 +44,9 @@ class RunState(TypedDict, total=False):
     tests: list[str]
     verify: dict
     forced_failure_done: bool
+    attack_started: float
+    diag_tokens: int
+    coder_tokens: int
     first_diagnosis: dict
     outcomes: list[dict]
     log: list[str]
@@ -60,8 +63,10 @@ def _subject(summary: str, limit: int = 72) -> str:
 
 class Loop:
     def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
-                 only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False):
+                 only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False,
+                 naive: bool = False):
         self.ctx, self.cfg, self.smap, self.profile = ctx, ctx.cfg, smap, profile
+        self.naive = naive  # baseline for the before/after comparison: no diagnosis, the coder gets only the failure
         self.fail_first_fix = fail_first_fix
         self.saved, self.known, self.only = saved, known, only
         self.coder_model = coder_model
@@ -160,7 +165,7 @@ class Loop:
             return {"current": {}}
         item = state["queue"][i]
         return {"current": item, "attempts": 0, "diagnosis": None, "coder_session": None, "coder_cost": 0.0,
-                "failure_note": "", "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
+                "failure_note": "", "attack_started": time.time(), "diag_tokens": 0, "coder_tokens": 0, "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
 
     def attack(self, state: RunState) -> RunState:
         from .driver import NavigationError
@@ -205,14 +210,20 @@ class Loop:
         return {"decision": decision, "decision_reason": reason, "log": self.note(state, f"decide: {decision}: {reason}")}
 
     def diagnose(self, state: RunState) -> RunState:
-        from .diagnoser import diagnose
+        from .diagnoser import Diagnosis, diagnose
+        if self.naive:
+            d = Diagnosis(summary=f"survive {state['current']['name'].replace('_', ' ')}",
+                          root_cause="Not diagnosed (naive baseline run).", files_to_change=[], fix_approach="",
+                          test_plan="Add one regression test that fails before the fix and passes after it.")
+            return {"diagnosis": d.to_dict(), "log": self.note(state, "diagnose: skipped (naive baseline)")}
         spec = self.spec(state["current"])
         screen = self.smap.screens.get(spec.screen)
         d = diagnose(self.cfg.app_dir, self.cfg.module, self.cfg.llm, state["result"], spec.__dict__,
                      asdict(screen) if screen else None, previous=state.get("diagnosis"),
                      failure_note=state.get("failure_note", ""))
         log = self.note(state, f"diagnose: {d.root_cause}\n  files: {d.files_to_change}\n  test: {d.test_plan[:160]}")
-        out = {"diagnosis": d.to_dict(), "log": log}
+        out = {"diagnosis": d.to_dict(), "log": log,
+               "diag_tokens": state.get("diag_tokens", 0) + d.input_tokens + d.output_tokens}
         if not state.get("diagnosis"):  # first diagnosis of this attack
             out["first_diagnosis"] = {**d.to_dict(), "attack": state["current"]["name"]}
         return out
@@ -228,6 +239,7 @@ class Loop:
         line = (f"fix: claude -p changed {res.changed or 'nothing'} in {res.seconds:.0f}s (${res.cost_usd:.2f} plan usage)"
                 + (f"; discarded out-of-bounds edits {res.rejected}" if res.rejected else ""))
         return {"coder_session": res.session_id, "coder_cost": state.get("coder_cost", 0.0) + res.cost_usd,
+                "coder_tokens": state.get("coder_tokens", 0) + res.tokens,
                 "attempts": state.get("attempts", 0) + 1, "changed": res.changed, "tests": res.test_files,
                 "log": self.note(state, line)}
 
@@ -266,7 +278,7 @@ class Loop:
         outcome = {"attack": item["name"], "status": "fixed", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "commit": sha, "checkpoint": checkpoint,
                    "files": state["changed"], "tests": state.get("tests", []), "attempts": state.get("attempts", 0),
-                   "diagnosis": d, "coder_session": state.get("coder_session"), "coder_cost": state.get("coder_cost", 0.0)}
+                   "diagnosis": d, "coder_session": state.get("coder_session"), "metrics": self.metrics(state)}
         log = self.note(state, f"commit: {sha[:8]}" + (f" (Entire checkpoint {checkpoint})" if checkpoint else " (no Entire checkpoint)"))
         return {"last_good": sha, "outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1, "log": log}
 
@@ -280,7 +292,8 @@ class Loop:
         res = state["result"]
         outcome = {"attack": state["current"]["name"], "status": "unfixed", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "attempts": state.get("attempts", 0),
-                   "diagnosis": state.get("diagnosis"), "reason": state.get("failure_note", "")[:500]}
+                   "diagnosis": state.get("diagnosis"), "reason": state.get("failure_note", "")[:500],
+                   "metrics": self.metrics(state)}
         return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1,
                 "log": self.note(state, f"give up: sources restored to {state['last_good'][:8]}")}
 
@@ -291,11 +304,18 @@ class Loop:
                    "before_detail": res.get("crash_signature") or res["reason"], "reason": state.get("decision_reason", "")}
         return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1}
 
+    def metrics(self, state: RunState) -> dict:
+        return {"seconds": round(time.time() - state.get("attack_started", time.time()), 1),
+                "diag_tokens": state.get("diag_tokens", 0), "coder_tokens": state.get("coder_tokens", 0),
+                "coder_cost_usd": round(state.get("coder_cost", 0.0), 3), "attempts": state.get("attempts", 0)}
+
     def report(self, state: RunState) -> RunState:
         out = paths.run_dir(self.cfg.app_dir, state["run_id"])
         out.mkdir(parents=True, exist_ok=True)
-        (out / "summary.json").write_text(json.dumps({"run_id": state["run_id"], "branch": state.get("branch"),
-                                                       "outcomes": state.get("outcomes", [])}, indent=2))
+        (out / "summary.json").write_text(json.dumps({
+            "run_id": state["run_id"], "branch": state.get("branch"),
+            "mode": "naive" if self.naive else "droid-monkey", "diagnoser_model": self.cfg.llm.model,
+            "coder_model": self.coder_model, "outcomes": state.get("outcomes", [])}, indent=2))
         (out / "log.txt").write_text("\n".join(state.get("log", [])))
         fixed = sum(1 for o in state.get("outcomes", []) if o["status"] == "fixed")
         return {"log": self.note(state, f"\nreport: {fixed} fixed of {len(state.get('outcomes', []))} attacks -> {out}")}
@@ -328,11 +348,11 @@ class Loop:
 
 def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
         only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print,
-        fail_first_fix: bool = False) -> dict:
-    tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}"])
+        fail_first_fix: bool = False, naive: bool = False) -> dict:
+    tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}", f"mode:{'naive' if naive else 'droid-monkey'}"])
     from langgraph.checkpoint.sqlite import SqliteSaver
 
-    loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix)
+    loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix, naive=naive)
     state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
 

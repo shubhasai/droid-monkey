@@ -350,8 +350,9 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
 @click.option("--resume", "resume_id", default=None, help="Resume a killed run by its run id.")
 @click.option("--fail-first-fix", is_flag=True, help="Report the first passing verification as failed (labelled), to "
                                                       "demonstrate the retry path.")
+@click.option("--naive", is_flag=True, help="Baseline for comparisons: skip diagnosis, give the coder only the failure.")
 def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None,
-        fail_first_fix: bool) -> None:
+        fail_first_fix: bool, naive: bool) -> None:
     """The full loop: plan, attack, diagnose, fix with Claude Code, verify by replay, commit. Unattended."""
     from . import loop
     run_id = resume_id or run_id or time.strftime("run-%Y%m%d-%H%M%S")
@@ -361,7 +362,7 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     smap, prof, saved, known = _load_app(ctx)
     names = [n.strip() for n in only.split(",")] if only else None
     final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model,
-                     resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix)
+                     resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix, naive=naive)
     click.echo("")
     for o in final.get("outcomes", []):
         color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow",
