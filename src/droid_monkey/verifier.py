@@ -26,7 +26,7 @@ class VerifyResult:
 @tracing.span(kind="TOOL", name="verify")
 def verify(ctx: Context, spec: Spec, test_files: list[str]) -> VerifyResult:
     cfg = ctx.cfg
-    build = gradle.build(cfg.app_dir, cfg.module, cfg.variant)
+    build = gradle.build(cfg.app_dir, cfg.module, cfg.variant, java_home=cfg.java_home)
     if not build.ok or not build.apk:
         return VerifyResult(False, "the fix does not build", False, build.seconds, build.log_tail)
     gradle.install(ctx.adb, build.apk)
@@ -36,7 +36,7 @@ def verify(ctx: Context, spec: Spec, test_files: list[str]) -> VerifyResult:
 
     test = None
     if test_files:
-        test = gradle.run_test(cfg.app_dir, cfg.module, cfg.variant, cfg.app_dir / test_files[0])
+        test = gradle.run_test(cfg.app_dir, cfg.module, cfg.variant, cfg.app_dir / test_files[0], java_home=cfg.java_home)
         if test.kind == "instrumented":
             gradle.install(ctx.adb, build.apk)  # connected tests uninstall the app when they finish
     test_ok = bool(test and test.ok)

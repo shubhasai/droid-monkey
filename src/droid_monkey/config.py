@@ -27,6 +27,7 @@ class AppConfig:
     avd: str | None = None
     entry_steps: list[str] = field(default_factory=list)   # optional: e.g. log in with a test account
     fill_values: dict[str, str] = field(default_factory=dict)  # optional: sample values by field-name keyword
+    java_home: str | None = None  # optional: JDK for this repo's Gradle (older Gradle cannot run on the newest JDK)
     llm: LLMConfig = field(default_factory=LLMConfig)
 
 
@@ -43,5 +44,6 @@ def load(app_dir: Path) -> AppConfig:
         avd=raw.get("avd"),
         entry_steps=list(raw.get("entry_steps") or []),
         fill_values=dict(raw.get("fill_values") or {}),
+        java_home=raw.get("java_home"),
         llm=LLMConfig.from_dict(raw.get("llm")),
     )

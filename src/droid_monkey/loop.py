@@ -97,7 +97,7 @@ class Loop:
             log = self.note(state, f"watchdog: {what} hung ({e}); restarting the emulator")
             adb = emulator.restart(self.ctx.adb, self.cfg.avd or emulator.list_avds()[0])
             self.ctx.adb, self.ctx.device = adb, Device(adb, self.cfg.package)
-            build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant)
+            build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
             if build.ok and build.apk:
                 gradle.install(adb, build.apk)
             log = log + [f"{time.strftime('%H:%M:%S')} watchdog: emulator back, app reinstalled; retrying {what}"]
@@ -116,7 +116,7 @@ class Loop:
     def setup(self, state: RunState) -> RunState:
         branch = f"droid-monkey/{state['run_id']}"
         base = git.start_run_branch(self.cfg.app_dir, branch, self.cfg.module)
-        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant)
+        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if not build.ok or not build.apk:
             raise RuntimeError(f"the app does not build before any fix:\n{build.log_tail}")
         gradle.install(self.ctx.adb, build.apk)
@@ -286,7 +286,7 @@ class Loop:
         """Restore the sources to the last good commit and record the attack as unfixed."""
         git.discard(self.cfg.app_dir, git.dirty_paths(self.cfg.app_dir, f"{self.cfg.module}/src"))
         git.reset_hard(self.cfg.app_dir, state["last_good"])
-        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant)
+        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if build.ok and build.apk:
             gradle.install(self.ctx.adb, build.apk)
         res = state["result"]

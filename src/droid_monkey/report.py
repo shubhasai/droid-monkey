@@ -170,3 +170,58 @@ def build(app_dir: Path, package: str, run_id: str) -> Report:
     dashboard(summary, package, run_dir, dash)
     outs = summary.get("outcomes", [])
     return Report(body, card, dash, score_of(outs), sum(1 for o in outs if o["status"] == "fixed"), len(outs))
+
+
+def compare(app_dir: Path, run_a: str, run_b: str) -> tuple[str, Path]:
+    """Before/after table of two runs (e.g. the naive baseline vs droid-monkey). Returns (markdown, path)."""
+    a, b = load_summary(app_dir, run_a), load_summary(app_dir, run_b)
+
+    def totals(s: dict) -> dict:
+        outs = s.get("outcomes", [])
+        m = [o.get("metrics") or {} for o in outs]
+        fixed = sum(1 for o in outs if o["status"] == "fixed")
+        tok = sum(x.get("coder_tokens", 0) for x in m)
+        return {
+            "mode": s.get("mode", "?"), "attacks": len(outs), "fixed": fixed,
+            "first_try": sum(1 for o in outs if o["status"] == "fixed" and o.get("attempts", 0) == 1),
+            "attempts": sum(o.get("attempts", 0) for o in outs),
+            "coder_tokens": tok, "coder_cost": round(sum(x.get("coder_cost_usd", 0.0) for x in m), 2),
+            "diag_tokens": sum(x.get("diag_tokens", 0) for x in m),
+            "minutes": round(sum(x.get("seconds", 0.0) for x in m) / 60, 1),
+            "tokens_per_fix": round(tok / fixed) if fixed else None,
+        }
+
+    ta, tb = totals(a), totals(b)
+
+    def delta(x, y, lower_is_better=True):
+        if not x or y is None or x is None:
+            return ""
+        pct = round(100 * (y - x) / x)
+        good = (pct < 0) == lower_is_better
+        return f" ({'+' if pct > 0 else ''}{pct}%{' better' if good and pct else ''})"
+
+    rows = [
+        ("Attacks fixed", f"{ta['fixed']}/{ta['attacks']}", f"{tb['fixed']}/{tb['attacks']}"),
+        ("Fixed on the first attempt", str(ta["first_try"]), str(tb["first_try"])),
+        ("Fix attempts in total", str(ta["attempts"]), str(tb["attempts"]) + delta(ta["attempts"], tb["attempts"])),
+        ("Coder tokens (Claude Code)", f"{ta['coder_tokens']:,}", f"{tb['coder_tokens']:,}" + delta(ta["coder_tokens"], tb["coder_tokens"])),
+        ("Coder tokens per fix", f"{ta['tokens_per_fix'] or '-':,}" if ta['tokens_per_fix'] else "-",
+         (f"{tb['tokens_per_fix']:,}" + delta(ta["tokens_per_fix"], tb["tokens_per_fix"])) if tb["tokens_per_fix"] else "-"),
+        ("Coder cost (plan usage)", f"${ta['coder_cost']}", f"${tb['coder_cost']}" + delta(ta["coder_cost"], tb["coder_cost"])),
+        ("Diagnoser tokens (Haiku API)", f"{ta['diag_tokens']:,}", f"{tb['diag_tokens']:,}"),
+        ("Time attacking + fixing", f"{ta['minutes']} min", f"{tb['minutes']} min" + delta(ta["minutes"], tb["minutes"])),
+    ]
+    lines = [f"| | {ta['mode']} (`{run_a}`) | {tb['mode']} (`{run_b}`) |", "|---|---|---|"]
+    lines += [f"| {r[0]} | {r[1]} | {r[2]} |" for r in rows]
+    lines += ["", "| Attack | " + f"{ta['mode']}: status, attempts, coder tokens | {tb['mode']}: status, attempts, coder tokens |",
+              "|---|---|---|"]
+    by_b = {o["attack"]: o for o in b.get("outcomes", [])}
+    for o in a.get("outcomes", []):
+        p = by_b.get(o["attack"], {})
+        fa, fb = o.get("metrics") or {}, p.get("metrics") or {}
+        lines.append(f"| `{o['attack']}` | {o['status']}, {o.get('attempts', 0)}, {fa.get('coder_tokens', 0):,} | "
+                     f"{p.get('status', '-')}, {p.get('attempts', 0)}, {fb.get('coder_tokens', 0):,} |")
+    md = "\n".join(lines) + "\n"
+    out = paths.run_dir(app_dir, run_b) / f"compare-{run_a}.md"
+    out.write_text(md)
+    return md, out

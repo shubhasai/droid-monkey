@@ -223,7 +223,7 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
     if build:
-        res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant)
+        res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
         if not res.ok or not res.apk:
             raise click.ClickException(f"build failed:\n{res.log_tail}")
         gradle.install(ctx.adb, res.apk)
@@ -408,3 +408,16 @@ def pr(run_id: str, app_dir: Path, base: str, draft: bool) -> None:
     if out.returncode != 0:
         raise click.ClickException(out.stderr.strip())
     click.echo(click.style(out.stdout.strip(), fg="green"))
+
+
+@main.command()
+@click.argument("run_a")
+@click.argument("run_b")
+@APP_DIR
+def compare(run_a: str, run_b: str, app_dir: Path) -> None:
+    """Before/after table of two runs, e.g. a --naive baseline vs a normal run."""
+    from . import report as report_mod
+    cfg = config_mod.load(app_dir)
+    md, out = report_mod.compare(cfg.app_dir, run_a, run_b)
+    click.echo(md)
+    click.echo(f"saved: {out}")

@@ -1,5 +1,6 @@
 """Build and install the app under test with its own Gradle wrapper."""
 
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -20,11 +21,21 @@ def _variant_task(module: str, variant: str, verb: str) -> str:
     return f":{module}:{verb}{variant[:1].upper()}{variant[1:]}"
 
 
-def build(app_dir: Path, module: str = "app", variant: str = "debug", timeout: float = 900) -> BuildResult:
+def gradle_env(java_home: str | None) -> dict | None:
+    """Environment for ./gradlew: JAVA_HOME pinned when the repo needs a specific JDK, otherwise inherited."""
+    if not java_home:
+        return None
+    env = dict(os.environ)
+    env["JAVA_HOME"] = java_home
+    return env
+
+
+def build(app_dir: Path, module: str = "app", variant: str = "debug", timeout: float = 900,
+          java_home: str | None = None) -> BuildResult:
     start = time.time()
     proc = subprocess.run(
         ["./gradlew", _variant_task(module, variant, "assemble"), "--console=plain", "-q"],
-        cwd=app_dir, capture_output=True, text=True, timeout=timeout,
+        cwd=app_dir, capture_output=True, text=True, timeout=timeout, env=gradle_env(java_home),
     )
     apks = sorted((app_dir / module / "build" / "outputs" / "apk" / variant).glob("*.apk"), key=lambda p: p.stat().st_mtime)
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-40:])
@@ -57,7 +68,8 @@ def test_class_of(path: Path) -> tuple[str, str] | None:
     return kind, (pkg + "." if pkg else "") + path.stem
 
 
-def run_test(app_dir: Path, module: str, variant: str, test_file: Path, timeout: float = 900) -> TestResult:
+def run_test(app_dir: Path, module: str, variant: str, test_file: Path, timeout: float = 900,
+             java_home: str | None = None) -> TestResult:
     """Run just one test class: a JVM unit test, or an instrumented test on the connected emulator."""
     found = test_class_of(test_file)
     if found is None:
@@ -70,7 +82,7 @@ def run_test(app_dir: Path, module: str, variant: str, test_file: Path, timeout:
         args = [f":{module}:connected{v}AndroidTest", f"-Pandroid.testInstrumentationRunnerArguments.class={cls}"]
     start = time.time()
     proc = subprocess.run(["./gradlew", *args, "--console=plain"], cwd=app_dir, capture_output=True, text=True,
-                          timeout=timeout)
+                          timeout=timeout, env=gradle_env(java_home))
     return TestResult(proc.returncode == 0, round(time.time() - start, 1), kind, cls,
                       failure_excerpt(proc.stdout + proc.stderr, app_dir, module))
 
