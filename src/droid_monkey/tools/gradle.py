@@ -21,12 +21,29 @@ def _variant_task(module: str, variant: str, verb: str) -> str:
     return f":{module}:{verb}{variant[:1].upper()}{variant[1:]}"
 
 
-def gradle_env(java_home: str | None) -> dict | None:
-    """Environment for ./gradlew: JAVA_HOME pinned when the repo needs a specific JDK, otherwise inherited."""
-    if not java_home:
-        return None
+def android_sdk() -> str | None:
+    """The Android SDK: ANDROID_HOME / ANDROID_SDK_ROOT, the standard macOS location, or wherever adb lives."""
+    for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        if os.environ.get(var) and Path(os.environ[var]).is_dir():
+            return os.environ[var]
+    default = Path.home() / "Library" / "Android" / "sdk"
+    if default.is_dir():
+        return str(default)
+    import shutil
+    adb = shutil.which("adb")
+    return str(Path(adb).resolve().parent.parent) if adb else None
+
+
+def gradle_env(java_home: str | None) -> dict:
+    """Environment for ./gradlew: the Android SDK always set (a fresh clone has no local.properties), and
+    JAVA_HOME pinned when the repo needs a specific JDK."""
     env = dict(os.environ)
-    env["JAVA_HOME"] = java_home
+    sdk = android_sdk()
+    if sdk:
+        env.setdefault("ANDROID_HOME", sdk)
+        env.setdefault("ANDROID_SDK_ROOT", sdk)
+    if java_home:
+        env["JAVA_HOME"] = java_home
     return env
 
 
