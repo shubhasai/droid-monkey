@@ -147,6 +147,10 @@ class Loop:
             raise RuntimeError(f"the app does not build before any fix:\n{build.log_tail}")
         gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
         log = self.note(state, f"setup: branch {branch} from {base[:8]}, built and installed in {build.seconds:.0f}s")
+        free = self.ctx.device.make_room()
+        if 0 <= free < 600:
+            log = self.note({**state, "log": log}, f"warning: only {free} MB free on the emulator; installing regression "
+                                                   "tests may fail. Uninstall apps you do not need from the emulator.")
         return {"branch": branch, "home_branch": home, "base": base, "last_good": base, "index": 0, "outcomes": [],
                 "log": log, "started": time.time()}
 
@@ -305,11 +309,15 @@ class Loop:
         from .tools.adb import AdbError
         try:
             v, wlog = self.with_watchdog(state, "verification",
-                                         lambda: verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", [])))
+                                         lambda: verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", []),
+                                                                 attempt=state.get("attempts", 1)))
         except (AdbError, NavigationError) as e:  # the harness failed, not the fix: do not spend a retry on it
             return {"decision": "give_up", "failure_note": f"verification could not run: {e}",
                     "log": self.note(state, f"verify: could not run ({str(e)[:200]}); giving up this attack")}
         state = {**state, "log": state.get("log", []) + wlog}
+        if v.harness:  # the device failed, not the fix: no retry with a "revised" diagnosis
+            return {"decision": "give_up", "failure_note": v.reason,
+                    "log": self.note(state, f"verify: could not run: {v.reason}")}
         if v.fixed and self.fail_first_fix and not state.get("forced_failure_done"):
             note = ("FORCED FAILURE (--fail-first-fix, for demonstrating recovery): this verification passed "
                     f"({v.reason}), but it is reported as failed so the retry path runs. Treat the fix as rejected by "

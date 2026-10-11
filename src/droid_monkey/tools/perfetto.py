@@ -81,6 +81,8 @@ class TraceAnalysis:
     device_mem_available_mb: dict
     startups: list[dict] = field(default_factory=list)        # {type, ms} for each launch of the app
     slowest_startup: dict = field(default_factory=dict)       # {type, ms, main_thread: {state: ms}, slices: [...]}
+    main_timeline: dict = field(default_factory=dict)          # {bin_ms, bins: [[running, runnable, asleep, io] ms]}
+    rss_series: list = field(default_factory=list)             # [t_ms, MB] of the app's resident memory, for charts
 
     def to_dict(self) -> dict:
         return self.__dict__
@@ -138,6 +140,7 @@ def _analyse(tp, package: str) -> TraceAnalysis:
     if not proc:
         return TraceAnalysis(seconds, {}, [], 0, 0, [], 0.0, {"count": 0, "ms": 0.0}, [], {}, {})
     upid, pid = proc[0].upid, proc[0].pid
+    t0 = _rows(tp, "select start_ts from trace_bounds")[0].start_ts
     main = _rows(tp, f"select utid from thread where upid = {upid} and tid = {pid}")
     utid = main[0].utid if main else -1
 
@@ -146,7 +149,8 @@ def _analyse(tp, package: str) -> TraceAnalysis:
 
     long_slices = []
     for r in _rows(tp, f"""
-            select s.ts, s.dur, s.name, s.dur / 1e6 as ms from slice s join thread_track tt on s.track_id = tt.id
+            select s.ts, s.dur, s.name, s.dur / 1e6 as ms, (s.ts - {t0}) / 1e6 as start_ms
+            from slice s join thread_track tt on s.track_id = tt.id
             where tt.utid = {utid} and s.depth = 0 and s.dur > 100e6 order by s.dur desc limit 8"""):
         within = {x.state: x.ms for x in _rows(tp, f"""
             select state, sum(min(ts + dur, {r.ts + r.dur}) - max(ts, {r.ts})) / 1e6 as ms from thread_state
@@ -159,7 +163,8 @@ def _analyse(tp, package: str) -> TraceAnalysis:
             where tt.utid = {utid} and s.depth > 0 and s.ts >= {r.ts} and s.ts < {r.ts + r.dur}
             order by s.dur desc limit 1""")
         name = r.name[:70] + (f" > {inner[0].name[:60]} ({inner[0].ms:.0f} ms)" if inner and inner[0].ms > 50 else "")
-        long_slices.append({"name": name, "ms": round(r.ms, 1), "states": {k: round(v, 1) for k, v in within.items()},
+        long_slices.append({"name": name, "ms": round(r.ms, 1), "start_ms": round(r.start_ms, 1),
+                            "states": {k: round(v, 1) for k, v in within.items()},
                             "blocked_in": blocked[0].blocked_function if blocked else ""})
 
     frames = _rows(tp, f"""
@@ -198,13 +203,46 @@ def _analyse(tp, package: str) -> TraceAnalysis:
 
     startups, slowest = _startups(tp, package)
     return TraceAnalysis(
-        startups=startups, slowest_startup=slowest,
+        startups=startups, slowest_startup=slowest, main_timeline=_timeline(tp, utid, t0), rss_series=_rss(tp, upid, t0),
         seconds=round(seconds, 1), main_thread_states={k: round(v, 1) for k, v in states.items()},
         long_main_slices=long_slices, main_blocks_over_700ms=sum(1 for x in long_slices if x["ms"] > 700),
         frames_over_16ms=int(frames[0].slow or 0) if frames else 0, busiest_threads=busiest,
         app_cpu_ms=round(cpu[0].ms or 0.0, 1) if cpu else 0.0,
         gc={"count": int(gc[0].n or 0), "ms": round(gc[0].ms or 0.0, 1)} if gc else {"count": 0, "ms": 0.0},
         binder_on_main=binder, memory_mb=memory, device_mem_available_mb=device)
+
+
+STATE_GROUPS = {"Running": 0, "R": 1, "R+": 1, "S": 2, "D": 3, "DK": 3}  # running, waiting for a CPU, asleep, I/O
+
+
+def _timeline(tp, utid: int, t0: int, bins: int = 400) -> dict:
+    """The main thread over time, in `bins` equal slices: ms spent running / waiting for a CPU / asleep or blocked /
+    on I/O in each. Light enough for a chart, and every long block stays visible."""
+    rows = _rows(tp, f"""select (ts - {t0}) / 1e6 as start, dur / 1e6 as ms, state from thread_state
+                          where utid = {utid} and dur > 0 order by ts""")
+    if not rows:
+        return {}
+    end = max(r.start + r.ms for r in rows)
+    width = end / bins
+    out = [[0.0, 0.0, 0.0, 0.0] for _ in range(bins)]
+    for r in rows:
+        g = STATE_GROUPS.get(r.state)
+        if g is None:
+            continue
+        a, b = r.start, r.start + r.ms
+        k = int(a // width)
+        while a < b and k < bins:
+            edge = min(b, (k + 1) * width)
+            out[k][g] += edge - a
+            a, k = edge, k + 1
+    return {"bin_ms": round(width, 3), "bins": [[round(x, 2) for x in row] for row in out]}
+
+
+def _rss(tp, upid: int, t0: int, points: int = 200) -> list:
+    rows = _rows(tp, f"""select (c.ts - {t0}) / 1e6 as t, c.value / 1048576.0 as mb from counter c
+        join process_counter_track ct on c.track_id = ct.id where ct.upid = {upid} and ct.name = 'mem.rss' order by c.ts""")
+    step = max(1, len(rows) // points)
+    return [[round(r.t), round(r.mb, 1)] for r in rows[::step]]
 
 
 def _startups(tp, package: str) -> tuple[list[dict], dict]:

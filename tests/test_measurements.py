@@ -27,7 +27,9 @@ class FakeAdb:
 
 def test_frozen_frames_count_every_bucket_from_700ms():
     f = Device(FakeAdb({"gfxinfo": GFXINFO}), "com.example").frames()
-    assert f == {"total": 330, "janky_pct": 2.12, "frozen": 3, "slow_ui_thread": 3, "p99_ms": 77}
+    assert {k: v for k, v in f.items() if k != "histogram"} == {"total": 330, "janky_pct": 2.12, "frozen": 3,
+                                                                "slow_ui_thread": 3, "p99_ms": 77}
+    assert f["histogram"] == [[5, 1], [16, 300], [650, 2], [700, 1], [1500, 2]]
 
 
 def test_memory_forces_a_gc_then_reads_activities_and_heap(monkeypatch):

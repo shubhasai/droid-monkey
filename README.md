@@ -84,7 +84,15 @@ droid-monkey run         # the full loop; asks you before every fix
 droid-monkey pr <run-id> # push the run's branch and open a PR with the evidence
 ```
 
-Everything droid-monkey writes goes to `.droid-monkey/` in your repo: analysis, screen map, attack specs, and one folder per run with screenshots, UI dumps, logcat, traces and verdicts.
+Everything droid-monkey writes goes to `.droid-monkey/` in your repo: analysis, screen map, attack specs, and one folder per run with screen recordings, screenshots, UI dumps, logcat, traces and verdicts.
+
+Every `run` and `attack` ends with a **visual report** (`dashboard.html`). Each attack gets the evidence that fits its failure:
+- the **screen recording** of the attack, next to the **same attack replayed after the fix**;
+- a before/after table of **lost input**;
+- a **main-thread timeline** from Perfetto, with every long block marked;
+- **frame-time**, **launch-time** (against the Play vitals limits) and **memory** charts;
+- the crash log or Android's **ANR record**;
+- the fix's **code diff**.
 
 ## Commands
 

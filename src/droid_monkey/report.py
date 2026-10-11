@@ -189,49 +189,139 @@ def receipt(summary: dict, package: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def dashboard(summary: dict, package: str, run_dir: Path, out: Path) -> None:
+def _verdict(ev: Path) -> dict:
+    try:
+        return json.loads((ev / "verdict.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _latest_replay(ev: Path) -> Path | None:
+    replays = sorted((p for p in ev.glob("replay-*") if p.is_dir()), key=lambda p: p.name)
+    return replays[-1] if replays else None
+
+
+def _fix_diff(app_dir: Path | None, commit: str | None) -> str:
+    """The fix commit's source diff, coloured."""
+    if not app_dir or not commit:
+        return ""
+    import subprocess
+    out = subprocess.run(["git", "show", "--format=", "--no-color", commit], cwd=app_dir, capture_output=True,
+                         text=True, stdin=subprocess.DEVNULL).stdout
+    lines = []
+    for ln in out.splitlines()[:400]:
+        cls = ("add" if ln.startswith("+") and not ln.startswith("+++") else
+               "del" if ln.startswith("-") and not ln.startswith("---") else
+               "hunk" if ln.startswith("@@") else "file" if ln.startswith(("diff ", "+++", "---")) else "")
+        lines.append(f'<span class="{cls}">{html.escape(ln)}</span>' if cls else html.escape(ln))
+    return "<pre class='diff'>" + "\n".join(lines) + "</pre>" if lines else ""
+
+
+def _media(rel: str, ev: Path, caption: str) -> str:
+    """The attack's screen recording (or its last screenshot), captioned."""
+    if (ev / "recording.mp4").exists():
+        return (f'<figure class="video"><video controls muted playsinline preload="metadata" src="{rel}/recording.mp4">'
+                f'</video><figcaption>{html.escape(caption)}</figcaption></figure>')
+    if (ev / "after.png").exists():
+        return f'<figure><img src="{rel}/after.png" alt=""><figcaption>{html.escape(caption)}</figcaption></figure>'
+    return ""
+
+
+def _visuals(o: dict, ev: Path, rel: str, app_dir: Path | None) -> str:
+    """The evidence a reader needs for this kind of failure, as pictures where a picture says it better."""
+    from . import charts
+    from .runner import SpecRunner
+    v = _verdict(ev)
+    m = v.get("metrics") or o.get("metrics") or {}
+    parts = []
+
+    # What happened, on screen: the attack, and the same attack replayed after the fix.
+    replay = _latest_replay(ev)
+    videos = [_media(rel, ev, f"the attack: {o['before']}")]
+    if replay is not None and o["status"] == "fixed":
+        videos.append(_media(f"{rel}/{replay.name}", replay, "the identical attack, replayed after the fix: survived"))
+    captions = {"before": "the start screen", "fault": "the moment the fault hit", "after": "after the fault"}
+    shots = "".join(f'<figure><img src="{rel}/{n}.png" alt="{captions[n]}"><figcaption>{captions[n]}</figcaption></figure>'
+                    for n in ("before", "fault", "after") if (ev / f"{n}.png").exists())
+    if any(videos):
+        parts.append(f'<h3>On screen</h3><div class="media">{"".join(videos)}</div>')
+    if shots:
+        parts.append(f'<div class="shots">{shots}</div>')
+
+    lost = v.get("lost_fields") or {}
+    if lost:
+        rows = "".join(f"<tr><td><code>{html.escape(k)}</code></td><td>{html.escape(str(b))}</td>"
+                       f"<td class='bad'>{html.escape(str(a)) or '<i>empty</i>'}</td></tr>" for k, (b, a) in lost.items())
+        parts.append(f"<h3>Lost input</h3><table><tr><th>field</th><th>before the fault</th><th>after</th></tr>{rows}</table>")
+
+    trace = m.get("trace") or {}
+    timeline = charts.main_thread(trace.get("main_timeline") or {}, trace.get("long_main_slices") or [])
+    if timeline:
+        parts.append(f"<h3>Main thread (Perfetto)</h3>{timeline}")
+    frames = charts.frame_times((m.get("frames") or {}).get("histogram") or [])
+    if frames:
+        parts.append(f"<h3>Frame times</h3>{frames}")
+    if m.get("startup"):
+        parts.append(f"<h3>Launch times</h3>{charts.launches(m['startup'], SpecRunner.START_LIMITS_MS)}")
+    mem = charts.memory(m.get("memory_before") or {}, m.get("memory_after") or {})
+    if mem:
+        parts.append(f"<h3>Memory after a forced GC</h3>{mem}")
+    rss = charts.rss(trace.get("rss_series") or [])
+    if rss:
+        parts.append(f"<details><summary>resident memory over time</summary>{rss}</details>")
+
+    diff = _fix_diff(app_dir, o.get("commit"))
+    if diff:
+        parts.append(f"<details open><summary>the fix ({html.escape(o['commit'][:8])})</summary>{diff}</details>")
+    return "".join(parts)
+
+
+def dashboard(summary: dict, package: str, run_dir: Path, out: Path, app_dir: Path | None = None) -> None:
     outs = summary.get("outcomes", [])
     rows = []
     for o in outs:
         d = o.get("diagnosis") or {}
         ev = run_dir / o["attack"]
-        shots = "".join(f'<figure><img src="{o["attack"]}/{n}.png" alt="{n}"><figcaption>{n}</figcaption></figure>'
-                        for n in ("before", "after") if (ev / f"{n}.png").exists())
         extras = []
         if (ev / "trace-analysis.txt").exists():
             extras.append(f"<details><summary>Perfetto analysis</summary><pre>{html.escape((ev / 'trace-analysis.txt').read_text())}"
                           f"</pre><p class='meta'>trace: <a href='{o['attack']}/trace.perfetto-trace'>trace.perfetto-trace</a>"
                           " · open it at <a href='https://ui.perfetto.dev'>ui.perfetto.dev</a></p></details>")
         if (ev / "logcat.txt").exists():
-            extras.append(f"<details><summary>crash log</summary><pre>{html.escape((ev / 'logcat.txt').read_text()[:6000])}</pre></details>")
+            label = "ANR record (Android's dropbox)" if o["before"] == "anr" else "crash log"
+            extras.append(f"<details><summary>{label}</summary><pre>{html.escape((ev / 'logcat.txt').read_text()[:6000])}</pre></details>")
         if o["status"] == "declined" and d:
             extras.append(f"<p><b>Suggested fix (not applied).</b> {html.escape(d.get('fix_approach', ''))} "
                           f"<span class='meta'>files: {html.escape(', '.join(d.get('files_to_change', [])))}</span></p>")
         if d.get("evidence"):
             extras.append("<details><summary>code evidence</summary><ul>" + "".join(
                 f"<li><code>{html.escape(e)}</code></li>" for e in d["evidence"][:8]) + "</ul></details>")
-        shots += ""
         rows.append(f"""<section class="card {o['status']}">
   <header><h2>{html.escape(o['attack'])}</h2><span class="pill">{html.escape(o['status'])}</span></header>
   <p class="meta">was <b>{html.escape(o['before'])}</b>: {html.escape(str(o.get('before_detail', '')))}</p>
   {f"<p><b>Root cause.</b> {html.escape(d.get('root_cause', ''))}</p><p><b>Fix.</b> {html.escape(d.get('fix_approach', ''))}</p>" if d else ""}
   {f"<p class='meta'>commit <code>{o['commit'][:8]}</code> · Entire checkpoint <code>{o.get('checkpoint') or '-'}</code> · tests {', '.join(Path(t).stem for t in o.get('tests', []))} · attempts {o.get('attempts', 0)}</p>" if o.get('commit') else ""}
-  <div class="shots">{shots}</div>
+  {_visuals(o, ev, o['attack'], app_dir)}
   {''.join(extras)}
 </section>""")
     out.write_text(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>droid-monkey run {html.escape(summary['run_id'])}</title>
 <style>
-:root{{--bg:#f5f6f8;--fg:#141a2b;--muted:#5a6275;--card:#fff;--line:#dde1e9;--ok:#1d7a4c;--bad:#b8322a;--acc:#2f45c9}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#0f1320;--fg:#e7eaf3;--muted:#9aa3b8;--card:#171c2c;--line:#2a3146;--ok:#5fd39a;--bad:#ff8a80;--acc:#8d9cff}}}}
+:root{{--bg:#f5f6f8;--fg:#141a2b;--muted:#5a6275;--card:#fff;--line:#dde1e9;--ok:#1d7a4c;--bad:#b8322a;--acc:#2f45c9;--warn:#b7791f;--idle:#c9ced9}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#0f1320;--fg:#e7eaf3;--muted:#9aa3b8;--card:#171c2c;--line:#2a3146;--ok:#5fd39a;--bad:#ff8a80;--acc:#8d9cff;--warn:#f0c060;--idle:#3a4258}}}}
 body{{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif;margin:0;padding:32px 16px}}
-main{{max-width:960px;margin:0 auto;display:grid;gap:16px}} h1{{margin:0}} .muted,.meta{{color:var(--muted)}}
-.score{{font-size:56px;font-weight:800;color:var(--acc)}} .card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}}
-.card header{{display:flex;justify-content:space-between;align-items:center}} .card h2{{margin:0;font-size:18px}}
+main{{max-width:960px;margin:0 auto;display:grid;gap:16px}} h1{{margin:0}} h3{{margin:18px 0 6px;font-size:14px;color:var(--muted);font-weight:600}}
+.muted,.meta{{color:var(--muted)}} .bad{{color:var(--bad)}}
+.score{{font-size:56px;font-weight:800;color:var(--acc)}} .card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}}
+.card header{{display:flex;justify-content:space-between;align-items:center;gap:8px}} .card h2{{margin:0;font-size:18px;overflow-wrap:anywhere}}
 .pill{{font:600 12px ui-monospace,monospace;padding:4px 8px;border-radius:6px;border:1px solid var(--line)}}
-.fixed .pill{{color:var(--ok)}} .unfixed .pill{{color:var(--bad)}} .shots{{display:flex;gap:12px;flex-wrap:wrap}}
-figure{{margin:0}} img{{width:180px;border-radius:8px;border:1px solid var(--line)}} figcaption{{font-size:12px;color:var(--muted)}}
+.fixed .pill{{color:var(--ok)}} .unfixed .pill,.declined .pill,.found .pill{{color:var(--bad)}} .shots,.media{{display:flex;gap:12px;flex-wrap:wrap}}
+figure{{margin:0}} img{{width:160px;border-radius:8px;border:1px solid var(--line)}} figcaption{{font-size:12px;color:var(--muted);max-width:260px}}
+video{{width:240px;max-width:100%;border-radius:8px;border:1px solid var(--line);background:#000}}
+svg.chart{{width:100%;height:auto;display:block}}
+table{{border-collapse:collapse;font-size:13px;width:100%}} td,th{{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left}}
 pre{{white-space:pre-wrap;font:12px/1.45 ui-monospace,monospace;background:var(--bg);padding:10px;border-radius:8px;overflow-x:auto}}
+pre.diff .add{{color:var(--ok)}} pre.diff .del{{color:var(--bad)}} pre.diff .hunk{{color:var(--acc)}} pre.diff .file{{color:var(--muted);font-weight:600}}
 details{{margin-top:8px}} summary{{cursor:pointer;color:var(--acc)}} a{{color:var(--acc)}}
 </style></head><body><main>
 <h1>droid-monkey · {html.escape(package)}</h1>
@@ -250,7 +340,7 @@ def build(app_dir: Path, package: str, run_id: str) -> Report:
     card = run_dir / "score-card.png"
     score_card(summary, package, card)
     dash = run_dir / "dashboard.html"
-    dashboard(summary, package, run_dir, dash)
+    dashboard(summary, package, run_dir, dash, app_dir)
     outs = summary.get("outcomes", [])
     return Report(body, card, dash, score_of(outs), sum(1 for o in outs if o["status"] == "fixed"), len(outs))
 

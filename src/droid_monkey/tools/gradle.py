@@ -119,6 +119,15 @@ _NOISE = ("> Task ", "BUILD ", "Deprecated Gradle", "You can use '--warning-mode
           "See https://docs.gradle.org", "actionable task")
 
 
+INSTALL_FAILURES = ("INSUFFICIENT_STORAGE", "not enough space", "install-create", "InstallException",
+                    "Failed to install split APK", "No space left on device")
+
+
+def is_install_failure(log: str) -> bool:
+    """The test never ran because the device could not install it: a harness problem, not a failing test."""
+    return any(k in log for k in INSTALL_FAILURES)
+
+
 def failure_excerpt(output: str, app_dir: Path, module: str, limit: int = 60) -> str:
     """The lines that explain a test failure (assertions, exceptions, compile errors), not the Gradle task list.
     Falls back to the JUnit XML report when the console only says that tests failed."""

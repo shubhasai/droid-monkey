@@ -391,6 +391,27 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
     (ctx.run_dir / "results.json").write_text(json.dumps([r.__dict__ for r in results], indent=2))
     _attack_summary(results)
     theme.path_line("evidence", ctx.run_dir)
+    if results:
+        theme.path_line("dashboard", _attack_dashboard(ctx, run_id, results))
+
+
+def _attack_dashboard(ctx, run_id: str, results) -> Path:
+    """The same visual report as a run's, for attacks run on their own (no fixing): what broke, with recordings,
+    charts and, with --diagnose, the suggested fix."""
+    from . import report as report_mod
+    outcomes = []
+    for r in results:
+        fix = Path(r.evidence_dir) / "suggested-fix.json"
+        d = json.loads(fix.read_text()) if fix.exists() else None
+        outcomes.append({"attack": r.attack, "status": "survived" if r.outcome == "survived" else "found",
+                         "before": r.outcome, "before_detail": r.crash_signature or r.reason, "metrics": r.metrics,
+                         "diagnosis": {k: d[k] for k in ("summary", "root_cause", "fix_approach", "files_to_change",
+                                                         "test_plan") if k in d} | {"evidence": d.get("code_evidence", [])}
+                         if d else None})
+    summary = {"run_id": run_id, "branch": "(attack only, no fixes)", "outcomes": outcomes, "mode": "attack"}
+    out = ctx.run_dir / "dashboard.html"
+    report_mod.dashboard(summary, ctx.cfg.package, ctx.run_dir, out, ctx.cfg.app_dir)
+    return out
 
 
 def _attack_summary(results) -> None:

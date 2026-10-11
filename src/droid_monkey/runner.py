@@ -33,9 +33,10 @@ class AttackResult:
 
 
 class SpecRunner:
-    def __init__(self, ctx: Context, spec: Spec):
+    def __init__(self, ctx: Context, spec: Spec, label: str | None = None):
+        """`label` keeps a replay's evidence apart from the attack's: <run>/<attack>/<label>/."""
         self.ctx, self.spec = ctx, spec
-        self.driver = AppDriver(ctx, ctx.run_dir / spec.name)
+        self.driver = AppDriver(ctx, ctx.run_dir / spec.name / label if label else ctx.run_dir / spec.name)
         self.device = ctx.device
 
     def run(self) -> AttackResult:
@@ -75,17 +76,28 @@ class SpecRunner:
         d.fresh(clear_data=True)  # same clean data state the screen's path was recorded from
         d.go_to(self._start_screen())
         start_screen = d.snapshot("before")
+        screen_rec = self.device.record_start()
+        if not screen_rec:
+            d.notes.append("screen recording did not start")
         if "no_leak" in spec.expect:
             self.metrics["memory_before"] = self.device.memory()
         if "smooth" in spec.expect:
             self.device.reset_frames()  # navigation to the start screen is not judged
-        recording = self._start_trace() if spec.trace else None
+        trace_rec = self._start_trace() if spec.trace else None
 
         before: dict[str, str] = {}
         fields_screen: frozenset[str] | None = None
         texts_before: set[str] | None = None
+        fault_shot = False
         for i, step in enumerate(spec.steps, 1):
             if "fault" in step:
+                if not fault_shot:  # what the user had on screen when the fault hit (e.g. the filled form)
+                    fault_shot = True
+                    try:
+                        d.dir.mkdir(parents=True, exist_ok=True)
+                        (d.dir / "fault.png").write_bytes(ui.screenshot(d.adb))
+                    except AdbError as e:
+                        d.notes.append(f"screenshot at the fault: {e}")
                 if "keeps_fields" in spec.expect and not before:
                     before = d.fields()
                     fields_screen = ui.dump(d.adb).fingerprint(d.package)
@@ -97,9 +109,15 @@ class SpecRunner:
                 (key, value), = step.items()
                 self._action(key, value)
 
-        trace_file = self._stop_trace(recording) if recording else None
+        trace_file = self._stop_trace(trace_rec) if trace_rec else None
         crashes = d.crashes()
         end_screen = d.snapshot("after")
+        if screen_rec:
+            try:
+                if not self.device.record_stop(d.dir / "recording.mp4"):
+                    d.notes.append("screen recording stopped early: nothing to save")
+            except AdbError as e:
+                d.notes.append(f"screen recording not saved: {e}")
 
         def same(a: frozenset[str] | None, b: frozenset[str]) -> bool:
             return not a or len(a & b) / max(1, len(a | b)) >= 0.5
@@ -117,8 +135,10 @@ class SpecRunner:
         if verdict.outcome == SURVIVED and texts_before is not None:
             if not (self._visible_texts(end_screen) - texts_before):
                 verdict = Verdict(NO_FEEDBACK, "after the trigger the app showed nothing new: no error, retry or message")
-        if verdict.outcome == SURVIVED and "smooth" in spec.expect:
-            verdict = self._judge_frames() or Verdict(SURVIVED, verdict.reason + ", no frozen frames")
+        if "smooth" in spec.expect:  # measured even after a crash or ANR: the chart shows how bad it got
+            frozen = self._judge_frames()
+            if verdict.outcome == SURVIVED:
+                verdict = frozen or Verdict(SURVIVED, verdict.reason + ", no frozen frames")
         if verdict.outcome == SURVIVED and "fast_start" in spec.expect:
             verdict = self._judge_startup() or Verdict(SURVIVED, verdict.reason + ", starts within Play vitals limits")
         if verdict.outcome == SURVIVED and "no_leak" in spec.expect:

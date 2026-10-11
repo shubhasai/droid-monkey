@@ -221,7 +221,9 @@ class Device:
             for ms, count in re.findall(r"(\d+)ms=(\d+)", hist.group(1)):
                 if int(ms) >= 700:
                     frozen += int(count)
-        return {"total": num(r"Total frames rendered: (\d+)"), "janky_pct": num(r"Janky frames: \d+ \(([\d.]+)%\)"),
+        histogram = [[int(ms), int(n)] for ms, n in re.findall(r"(\d+)ms=(\d+)", hist.group(1)) if int(n)] if hist else []
+        return {"histogram": histogram,
+                "total": num(r"Total frames rendered: (\d+)"), "janky_pct": num(r"Janky frames: \d+ \(([\d.]+)%\)"),
                 "frozen": frozen, "slow_ui_thread": num(r"Number Slow UI thread: (\d+)"),
                 "p99_ms": num(r"99th percentile: (\d+)ms")}
 
@@ -243,6 +245,47 @@ class Device:
             raise AdbError(f"expected a cold start, Android reported {launch_state}")
         return int(ms.group(1)), launch_state
 
+    # ---- storage ---------------------------------------------------------------------------------
+
+    def free_mb(self) -> int:
+        """Free space on /data, where apps and test APKs are installed."""
+        out = self.adb.shell("df -k /data", check=False).strip().splitlines()
+        try:
+            return int(out[-1].split()[3]) // 1024
+        except (IndexError, ValueError):
+            return -1
+
+    def make_room(self, need_mb: int = 600) -> int:
+        """Ask Android to drop app caches (disposable by definition) until `need_mb` is free. Returns free MB."""
+        if 0 <= self.free_mb() < need_mb:
+            self.adb.shell(f"pm trim-caches {need_mb * 4}M", check=False, timeout=120)
+        return self.free_mb()
+
+    # ---- screen recording ------------------------------------------------------------------------
+
+    RECORDING = "/data/local/tmp/droid-monkey-attack.mp4"
+
+    def record_start(self) -> bool:
+        """Record the screen in the background (Android's screenrecord, up to 170 s). False if it did not start."""
+        self.adb.shell(f"rm -f {self.RECORDING}", check=False)
+        self.adb.shell(f"setsid nohup screenrecord --bit-rate 2000000 --time-limit 170 {self.RECORDING} "
+                       "> /dev/null 2>&1 < /dev/null &", check=False)
+        time.sleep(0.7)
+        return bool(self.adb.shell("pidof screenrecord", check=False).strip())
+
+    def record_stop(self, out) -> bool:
+        """Stop the recording (SIGINT, so the MP4 is finalised) and pull it to `out`."""
+        pid = self.adb.shell("pidof screenrecord", check=False).strip()
+        if pid:
+            self.adb.shell(f"kill -INT {pid}", check=False)
+            for _ in range(20):
+                time.sleep(0.25)
+                if not self.adb.shell("pidof screenrecord", check=False).strip():
+                    break
+        self.adb.run("pull", self.RECORDING, str(out), check=False, timeout=120)
+        self.adb.shell(f"rm -f {self.RECORDING}", check=False)
+        return out.exists() and out.stat().st_size > 0
+
     def poke(self) -> None:
         """A key press the app ignores (Shift), sent without waiting for it to be handled. Android raises an input ANR
         when an event waits 5 s for a blocked main thread, so this turns a long freeze into a real ANR."""
@@ -259,6 +302,7 @@ class Device:
     def restore(self) -> None:
         """Undo every fault so one attack never poisons the next. Always called in a finally block."""
         errors = []
+        self.adb.shell("pkill -INT screenrecord", check=False)  # a recording left by an interrupted attack
         try:
             self.set_network(True)
         except AdbError as e:
