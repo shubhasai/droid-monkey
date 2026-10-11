@@ -18,9 +18,13 @@ import sys
 from pathlib import Path
 from typing import TypedDict
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
-load_dotenv(Path.home() / ".droid-monkey" / ".env")
+# Keys: real env vars win, then ~/.droid-monkey/.env, then the .env in this checkout (git-ignored).
+for _env in (Path.home() / ".droid-monkey" / ".env", Path(__file__).resolve().parents[1] / ".env"):
+    for _k, _v in dotenv_values(_env).items():
+        if _v and not os.environ.get(_k):  # empty placeholders never hide real values
+            os.environ[_k] = _v
 
 import neatlogs  # noqa: E402  (must init before LangChain/LangGraph/Anthropic are imported)
 
@@ -58,8 +62,8 @@ def plan(state: State) -> State:
         "You plan fault-injection attacks on an Android shopping app. In one sentence, "
         "say which of these to run first and why: process_death, rotation, network_loss."
     )
-    print(f"[plan] {reply.content}")
-    return {"plan": reply.content, "attempts": 0}
+    print(f"[plan] {reply.text}")
+    return {"plan": reply.text, "attempts": 0}
 
 
 @span(kind="TOOL", name="adb_inject", tool_name="adb")
@@ -84,8 +88,8 @@ def decide(state: State) -> State:
         f"An attack result came back '{state['outcome']}' after {state['attempts']} attempt(s), "
         "and the retry cap is 3. Answer with exactly one word: retry or done."
     )
-    decision = "retry" if "retry" in str(reply.content).lower() else "done"
-    print(f"[decide] model said {reply.content!r} -> {decision}")
+    decision = "retry" if "retry" in reply.text.lower() else "done"
+    print(f"[decide] model said {reply.text!r} -> {decision}")
     return {"decision": decision}
 
 
@@ -119,9 +123,9 @@ def run(thread: str) -> dict:
         snapshot = graph.get_state(config)
         if snapshot.next:
             print(f"[resume] thread {thread} has pending nodes {snapshot.next}; continuing from the checkpoint")
-            result = graph.invoke(None, config)
+            result = graph.invoke(None, config, durability="sync")
         else:
-            result = graph.invoke({}, config)
+            result = graph.invoke({}, config, durability="sync")
         return result
 
 
@@ -131,7 +135,7 @@ if __name__ == "__main__":
     p.add_argument("--kill-at", choices=["inject"], default=None)
     ARGS = p.parse_args()
     if not os.environ.get("DROID_MONKEY_API_KEY") or not os.environ.get("NEATLOGS_API_KEY"):
-        sys.exit("Fill DROID_MONKEY_API_KEY and NEATLOGS_API_KEY in ~/.droid-monkey/.env first.")
+        sys.exit("Set DROID_MONKEY_API_KEY and NEATLOGS_API_KEY in droid-monkey/.env or ~/.droid-monkey/.env first.")
     final = run(ARGS.thread)
     print(f"[done] {final}")
     neatlogs.flush()
