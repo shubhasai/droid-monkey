@@ -1,6 +1,7 @@
 """neatlogs tracing. init() must run before LangChain, LangGraph or the Anthropic SDK are imported."""
 
 import functools
+import logging
 import os
 from pathlib import Path
 
@@ -27,6 +28,8 @@ def init(workflow: str = "droid-monkey", tags: list[str] | None = None) -> bool:
         return False
     import neatlogs
 
+    # Export retries are logged by OpenTelemetry on stderr; keep the console readable if the backend is down.
+    logging.getLogger("opentelemetry").setLevel(logging.CRITICAL)
     neatlogs.init(workflow_name=workflow, instrumentations=["langgraph", "langchain", "anthropic"], tags=tags or [])
     _state["enabled"] = True
     return True

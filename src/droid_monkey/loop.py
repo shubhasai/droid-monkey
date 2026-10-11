@@ -1,0 +1,295 @@
+"""`droid-monkey run`: the agent loop as a LangGraph graph.
+
+    setup -> plan -> pick -> attack -> decide -> diagnose -> fix -> verify -> commit -> pick ... -> report
+
+The model plans the order of attacks and makes the decide step (diagnose or move on; after a failed fix, retry with a
+revised diagnosis or give up). Code enforces the caps, decides every verdict (crash buffer, field diffs, replay of the
+identical spec, the new test), and makes every commit. Progress is checkpointed to SQLite after every node, so a
+killed run can resume. Every node, model call and tool call is traced in neatlogs.
+"""
+
+import json
+import re
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import TypedDict
+
+from . import paths, scenarios as scenarios_mod, specs as specs_mod, tracing
+from .driver import Context
+from .explorer import ScreenMap
+from .profile import AppProfile
+from .runner import SpecRunner
+from .tools import gradle, git
+
+MAX_FIX_ATTEMPTS = 2
+
+
+class RunState(TypedDict, total=False):
+    run_id: str
+    branch: str
+    last_good: str
+    queue: list[dict]          # attack items: {name, reason, spec_yaml}
+    index: int
+    current: dict
+    result: dict
+    diagnosis: dict | None
+    coder_session: str | None
+    coder_cost: float
+    attempts: int
+    failure_note: str
+    decision: str
+    decision_reason: str
+    changed: list[str]
+    tests: list[str]
+    verify: dict
+    outcomes: list[dict]
+    log: list[str]
+
+
+class Loop:
+    def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
+                 only: list[str] | None, coder_model: str, echo=print):
+        self.ctx, self.cfg, self.smap, self.profile = ctx, ctx.cfg, smap, profile
+        self.saved, self.known, self.only = saved, known, only
+        self.coder_model = coder_model
+        self.echo = echo
+        self._llm = None
+
+    # ---- helpers ---------------------------------------------------------------------------------
+
+    def llm(self):
+        if self._llm is None:
+            from .llm import chat_model
+            self._llm = chat_model(self.cfg.llm)
+        return self._llm
+
+    def ask_json(self, prompt: str) -> dict:
+        reply = self.llm().invoke(prompt)
+        m = re.search(r"\{.*\}|\[.*\]", reply.text, flags=re.S)
+        return json.loads(m.group(0)) if m else {}
+
+    def spec(self, item: dict) -> specs_mod.Spec:
+        return specs_mod.parse(item["spec_yaml"], self.known)
+
+    def note(self, state: RunState, line: str) -> list[str]:
+        self.echo(line)
+        return state.get("log", []) + [f"{time.strftime('%H:%M:%S')} {line}"]
+
+    # ---- nodes -----------------------------------------------------------------------------------
+
+    def setup(self, state: RunState) -> RunState:
+        branch = f"droid-monkey/{state['run_id']}"
+        base = git.start_run_branch(self.cfg.app_dir, branch, self.cfg.module)
+        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant)
+        if not build.ok or not build.apk:
+            raise RuntimeError(f"the app does not build before any fix:\n{build.log_tail}")
+        gradle.install(self.ctx.adb, build.apk)
+        log = self.note(state, f"setup: branch {branch} from {base[:8]}, built and installed in {build.seconds:.0f}s")
+        return {"branch": branch, "last_good": base, "index": 0, "outcomes": [], "log": log}
+
+    def plan(self, state: RunState) -> RunState:
+        candidates = scenarios_mod.generate(self.smap)
+        items = []
+        for name, template in specs_mod.builtin_templates().items():
+            best = scenarios_mod.best(candidates, name)
+            if best is None:
+                continue
+            try:
+                spec = specs_mod.render(template, best.values(), self.known)
+            except specs_mod.SpecError:
+                continue
+            items.append({"name": name, "reason": best.reason, "spec_yaml": spec.to_yaml()})
+        for name, spec in self.saved.items():
+            items.append({"name": name, "reason": spec.description, "spec_yaml": spec.to_yaml()})
+        if self.only:
+            items = [i for i in items if i["name"] in self.only]
+
+        listing = "\n".join(f"- {i['name']}: {i['reason']}" for i in items)
+        signals = "\n".join(f"- {s.kind} at {s.file}:{s.line}" for s in self.profile.signals) or "- none"
+        prompt = (
+            "You plan fault-injection attacks on an Android app; each failing attack is then diagnosed and fixed. "
+            "Order these attacks so the ones most likely to expose a real bug come first, using the code risk "
+            f"signals.\nAttacks:\n{listing}\nCode risk signals:\n{signals}\n"
+            'Reply with ONLY a JSON array: [{"name": "...", "reason": "one sentence: why at this position"}]')
+        try:
+            ordered = self.ask_json(prompt)
+            by_name = {i["name"]: i for i in items}
+            queue = [{**by_name[o["name"]], "reason": o.get("reason", by_name[o["name"]]["reason"])}
+                     for o in ordered if isinstance(o, dict) and o.get("name") in by_name]
+            queue += [i for i in items if i["name"] not in {q["name"] for q in queue}]
+        except Exception as e:  # an unusable plan falls back to the generated order
+            queue = items
+            self.echo(f"plan: model answer unusable ({e}); using the generated order")
+        log = self.note(state, "plan:\n" + "\n".join(f"  {n + 1}. {q['name']}: {q['reason']}" for n, q in enumerate(queue)))
+        return {"queue": queue, "log": log}
+
+    def pick(self, state: RunState) -> RunState:
+        i = state.get("index", 0)
+        if i >= len(state["queue"]):
+            return {"current": {}}
+        item = state["queue"][i]
+        return {"current": item, "attempts": 0, "diagnosis": None, "coder_session": None, "coder_cost": 0.0,
+                "failure_note": "", "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
+
+    def attack(self, state: RunState) -> RunState:
+        res = SpecRunner(self.ctx, self.spec(state["current"])).run()
+        detail = res.exception or res.reason
+        line = f"attack {res.attack}: {res.outcome} ({detail})" + (f" at {res.crash_signature}" if res.crash_signature else "")
+        return {"result": asdict(res), "log": self.note(state, line)}
+
+    def decide(self, state: RunState) -> RunState:
+        """Model chooses the next step; code checks it is allowed."""
+        res, attempts = state["result"], state.get("attempts", 0)
+        verifying = state.get("decision") in ("verify_failed", "build_failed")
+        if not verifying and res["outcome"] == "survived":
+            return {"decision": "next", "decision_reason": "the app survived this attack",
+                    "log": self.note(state, "decide: next (survived)")}
+        if verifying:
+            options = ["retry", "give_up"] if attempts < MAX_FIX_ATTEMPTS else ["give_up"]
+            situation = f"Fix attempt {attempts} of {MAX_FIX_ATTEMPTS} failed verification: {state.get('failure_note', '')[:800]}"
+        else:
+            options = ["diagnose", "skip"]
+            situation = f"Attack result: {res['outcome']}: {res.get('exception') or res['reason']} {res.get('crash_signature', '')}"
+        prompt = (f"You run an agent that attacks an Android app and fixes what breaks.\nAttack: {state['current']['name']}"
+                  f"\n{situation}\nChoose the next step from {options}. Retry only if a revised diagnosis could plausibly"
+                  ' succeed. Reply with ONLY JSON: {"decision": "...", "reason": "one sentence"}')
+        try:
+            d = self.ask_json(prompt)
+            decision, reason = d.get("decision"), d.get("reason", "")
+        except Exception as e:
+            decision, reason = None, f"model answer unusable: {e}"
+        if decision not in options:  # code enforces the allowed moves
+            decision = options[0]
+            reason = f"fallback rule ({reason or 'invalid choice'})"
+        return {"decision": decision, "decision_reason": reason, "log": self.note(state, f"decide: {decision}: {reason}")}
+
+    def diagnose(self, state: RunState) -> RunState:
+        from .diagnoser import diagnose
+        spec = self.spec(state["current"])
+        screen = self.smap.screens.get(spec.screen)
+        d = diagnose(self.cfg.app_dir, self.cfg.module, self.cfg.llm, state["result"], spec.__dict__,
+                     asdict(screen) if screen else None, previous=state.get("diagnosis"),
+                     failure_note=state.get("failure_note", ""))
+        log = self.note(state, f"diagnose: {d.root_cause}\n  files: {d.files_to_change}\n  test: {d.test_plan[:160]}")
+        return {"diagnosis": d.to_dict(), "log": log}
+
+    def fix(self, state: RunState) -> RunState:
+        from . import coder
+        from .diagnoser import Diagnosis
+        d = Diagnosis(**state["diagnosis"])
+        spec = self.spec(state["current"])
+        res = coder.fix(self.cfg.app_dir, self.cfg.module, coder.failure_text(state["result"], spec.__dict__), d,
+                        self.coder_model, resume_session=state.get("coder_session"),
+                        failure_note=state.get("failure_note", ""))
+        line = (f"fix: claude -p changed {res.changed or 'nothing'} in {res.seconds:.0f}s (${res.cost_usd:.2f} plan usage)"
+                + (f"; discarded out-of-bounds edits {res.rejected}" if res.rejected else ""))
+        return {"coder_session": res.session_id, "coder_cost": state.get("coder_cost", 0.0) + res.cost_usd,
+                "attempts": state.get("attempts", 0) + 1, "changed": res.changed, "tests": res.test_files,
+                "log": self.note(state, line)}
+
+    def verify(self, state: RunState) -> RunState:
+        from . import verifier
+        if not state.get("changed"):
+            return {"decision": "verify_failed", "failure_note": "the coder changed no source files",
+                    "log": self.note(state, "verify: nothing to verify, the coder changed no files")}
+        v = verifier.verify(self.ctx, self.spec(state["current"]), state.get("tests", []))
+        if v.fixed:
+            return {"decision": "fixed", "failure_note": "", "verify": {"replay": asdict(v.replay), "test": asdict(v.test)},
+                    "log": self.note(state, f"verify: FIXED: {v.reason}")}
+        if not v.build_ok:
+            return {"decision": "build_failed", "failure_note": verifier.build_failure_note(v),
+                    "log": self.note(state, "verify: the fix does not build")}
+        return {"decision": "verify_failed", "failure_note": v.reason, "log": self.note(state, f"verify: not fixed: {v.reason[:300]}")}
+
+    def commit(self, state: RunState) -> RunState:
+        item, d, res = state["current"], state["diagnosis"], state["result"]
+        message = (f"fix({item['name']}): {d.get('summary', '').rstrip('.')[:60]}\n\n{d['root_cause']}\n\nFix: {d['fix_approach']}\n\n"
+                   f"Attack: {item['name']}: {res['outcome']} ({res.get('exception') or res['reason']})\n"
+                   f"Verified: the identical attack was replayed and survived; regression test {', '.join(state.get('tests', []))} passes.\n"
+                   f"droid-monkey run {state['run_id']}")
+        sha, checkpoint = git.commit(self.cfg.app_dir, state["changed"], message)
+        outcome = {"attack": item["name"], "status": "fixed", "before": res["outcome"],
+                   "before_detail": res.get("crash_signature") or res["reason"], "commit": sha, "checkpoint": checkpoint,
+                   "files": state["changed"], "tests": state.get("tests", []), "attempts": state.get("attempts", 0),
+                   "diagnosis": d, "coder_session": state.get("coder_session"), "coder_cost": state.get("coder_cost", 0.0)}
+        log = self.note(state, f"commit: {sha[:8]}" + (f" (Entire checkpoint {checkpoint})" if checkpoint else " (no Entire checkpoint)"))
+        return {"last_good": sha, "outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1, "log": log}
+
+    def give_up(self, state: RunState) -> RunState:
+        """Restore the sources to the last good commit and record the attack as unfixed."""
+        git.discard(self.cfg.app_dir, git.dirty_paths(self.cfg.app_dir, f"{self.cfg.module}/src"))
+        git.reset_hard(self.cfg.app_dir, state["last_good"])
+        build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant)
+        if build.ok and build.apk:
+            gradle.install(self.ctx.adb, build.apk)
+        res = state["result"]
+        outcome = {"attack": state["current"]["name"], "status": "unfixed", "before": res["outcome"],
+                   "before_detail": res.get("crash_signature") or res["reason"], "attempts": state.get("attempts", 0),
+                   "diagnosis": state.get("diagnosis"), "reason": state.get("failure_note", "")[:500]}
+        return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1,
+                "log": self.note(state, f"give up: sources restored to {state['last_good'][:8]}")}
+
+    def next_attack(self, state: RunState) -> RunState:
+        res = state["result"]
+        status = "survived" if res["outcome"] == "survived" else "skipped"
+        outcome = {"attack": state["current"]["name"], "status": status, "before": res["outcome"],
+                   "before_detail": res.get("crash_signature") or res["reason"], "reason": state.get("decision_reason", "")}
+        return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1}
+
+    def report(self, state: RunState) -> RunState:
+        out = paths.run_dir(self.cfg.app_dir, state["run_id"])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "summary.json").write_text(json.dumps({"run_id": state["run_id"], "branch": state.get("branch"),
+                                                       "outcomes": state.get("outcomes", [])}, indent=2))
+        (out / "log.txt").write_text("\n".join(state.get("log", [])))
+        fixed = sum(1 for o in state.get("outcomes", []) if o["status"] == "fixed")
+        return {"log": self.note(state, f"\nreport: {fixed} fixed of {len(state.get('outcomes', []))} attacks -> {out}")}
+
+    # ---- graph -----------------------------------------------------------------------------------
+
+    def graph(self):
+        from langgraph.graph import END, START, StateGraph
+        g = StateGraph(RunState)
+        for name in ("setup", "plan", "pick", "attack", "decide", "diagnose", "fix", "verify", "commit", "give_up",
+                     "next_attack", "report"):
+            g.add_node(name, getattr(self, name))
+        g.add_edge(START, "setup")
+        g.add_edge("setup", "plan")
+        g.add_edge("plan", "pick")
+        g.add_conditional_edges("pick", lambda s: "attack" if s.get("current") else "report", ["attack", "report"])
+        g.add_edge("attack", "decide")
+        g.add_conditional_edges("decide", lambda s: {"diagnose": "diagnose", "retry": "diagnose",
+                                                      "give_up": "give_up"}.get(s["decision"], "next_attack"),
+                                ["diagnose", "give_up", "next_attack"])
+        g.add_edge("diagnose", "fix")
+        g.add_edge("fix", "verify")
+        g.add_conditional_edges("verify", lambda s: "commit" if s["decision"] == "fixed" else "decide", ["commit", "decide"])
+        g.add_edge("commit", "pick")
+        g.add_edge("give_up", "pick")
+        g.add_edge("next_attack", "pick")
+        g.add_edge("report", END)
+        return g
+
+
+def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
+        only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print) -> dict:
+    tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}"])
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo)
+    state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+
+    @tracing.span(kind="WORKFLOW", name="droid-monkey run", session_id=run_id)
+    def go() -> dict:
+        with SqliteSaver.from_conn_string(str(state_db)) as saver:
+            graph = loop.graph().compile(checkpointer=saver)
+            config = {"configurable": {"thread_id": run_id}, "recursion_limit": 200}
+            if resume:
+                return graph.invoke(None, config, durability="sync")
+            return graph.invoke({"run_id": run_id, "log": []}, config, durability="sync")
+
+    final = go()
+    tracing.flush()
+    return final

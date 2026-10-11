@@ -42,6 +42,7 @@ def run(
     resume: str | None = None,
     timeout: float = 900,
     mcp_config: Path | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> ClaudeResult:
     cmd = [claude_path(), "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
            "--allowedTools", ",".join(allowed_tools)]
@@ -51,6 +52,8 @@ def run(
         cmd += ["--model", model]
     if resume:
         cmd += ["--resume", resume]
+    if disallowed_tools:
+        cmd += ["--disallowedTools", *disallowed_tools]  # variadic flag: keep it last
     env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "DROID_MONKEY_API_KEY")}
     try:
         proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)

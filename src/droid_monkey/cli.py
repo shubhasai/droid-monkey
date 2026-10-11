@@ -317,3 +317,28 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
     """Describe an attack in plain words; the designer agent turns it into a validated, tested spec."""
     from .designer import new_goal
     _design(app_dir, new_goal(prompt), "prompt", try_on_device, max_tries=3)
+
+
+@main.command()
+@APP_DIR
+@click.option("--attacks", "only", default=None, help="Comma-separated attack names to run (default: all built-in and saved).")
+@click.option("--coder-model", default="claude-sonnet-5-5", show_default=True, help="Model for the Claude Code fixer.")
+@click.option("--run-id", default=None, help="Run id (default: a timestamp). The run branch is droid-monkey/<run-id>.")
+@click.option("--resume", "resume_id", default=None, help="Resume a killed run by its run id.")
+def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None) -> None:
+    """The full loop: plan, attack, diagnose, fix with Claude Code, verify by replay, commit. Unattended."""
+    from . import loop
+    run_id = resume_id or run_id or time.strftime("run-%Y%m%d-%H%M%S")
+    ctx = _context(app_dir, run_id)
+    if not _map_path(ctx).exists():
+        raise click.ClickException("no screen map yet: run `droid-monkey explore` first")
+    smap, prof, saved, known = _load_app(ctx)
+    names = [n.strip() for n in only.split(",")] if only else None
+    final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model,
+                     resume=bool(resume_id), echo=click.echo)
+    click.echo("")
+    for o in final.get("outcomes", []):
+        color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow"}.get(o["status"])
+        extra = f"  {o['commit'][:8]}" + (f" checkpoint {o['checkpoint']}" if o.get("checkpoint") else "") if o.get("commit") else ""
+        click.echo(f"  {o['attack']:28} " + click.style(f"{o['status']:9}", fg=color) + f" was {o['before']}{extra}")
+    click.echo(f"branch: {final.get('branch')}   evidence: {ctx.run_dir}")
