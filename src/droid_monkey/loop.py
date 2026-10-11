@@ -153,7 +153,13 @@ class Loop:
                 "failure_note": "", "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
 
     def attack(self, state: RunState) -> RunState:
-        res, wlog = self.with_watchdog(state, "the attack", lambda: SpecRunner(self.ctx, self.spec(state["current"])).run())
+        from .driver import NavigationError
+        try:
+            res, wlog = self.with_watchdog(state, "the attack",
+                                           lambda: SpecRunner(self.ctx, self.spec(state["current"])).run())
+        except NavigationError as e:  # e.g. an earlier fix changed the UI on the way to this screen
+            result = {"attack": state["current"]["name"], "outcome": "unreachable", "reason": str(e)}
+            return {"result": result, "log": self.note(state, f"attack {result['attack']}: unreachable ({e})")}
         detail = res.exception or res.reason
         line = f"attack {res.attack}: {res.outcome} ({detail})" + (f" at {res.crash_signature}" if res.crash_signature else "")
         state = {**state, "log": state.get("log", []) + wlog}
@@ -163,6 +169,9 @@ class Loop:
         """Model chooses the next step; code checks it is allowed."""
         res, attempts = state["result"], state.get("attempts", 0)
         verifying = state.get("decision") in ("verify_failed", "build_failed")
+        if not verifying and res["outcome"] == "unreachable":
+            return {"decision": "next", "decision_reason": f"could not reach the attacked screen: {res['reason']}",
+                    "log": self.note(state, "decide: next (screen unreachable; re-explore after this run)")}
         if not verifying and res["outcome"] == "survived":
             return {"decision": "next", "decision_reason": "the app survived this attack",
                     "log": self.note(state, "decide: next (survived)")}
@@ -261,7 +270,7 @@ class Loop:
 
     def next_attack(self, state: RunState) -> RunState:
         res = state["result"]
-        status = "survived" if res["outcome"] == "survived" else "skipped"
+        status = {"survived": "survived", "unreachable": "unreachable"}.get(res["outcome"], "skipped")
         outcome = {"attack": state["current"]["name"], "status": status, "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "reason": state.get("decision_reason", "")}
         return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1}

@@ -69,3 +69,11 @@ def test_verdicts():
     assert classify([], {}, {}, screen_restored=False).outcome == LOST_STATE
     crash = logcat.Crash(kind="crash", exception="java.io.IOException", message="m")
     assert classify([crash], before, before).outcome == CRASHED
+
+
+def test_selector_alternatives_and_case_insensitive_text():
+    xml = (FIX / "checkout_filled.xml").read_text()
+    screen = ui.parse(xml)
+    assert screen.find("android:id/button1|text:ravi kumar") is not None   # first alternative absent, second matches
+    assert screen.find("text:RAVI KUMAR") is not None
+    assert screen.find("nope|also_nope") is None

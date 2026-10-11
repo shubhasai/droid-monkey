@@ -7,7 +7,8 @@ from pathlib import Path
 
 from . import paths, specs as specs_mod
 
-STATUS_ICON = {"fixed": "✅ fixed", "unfixed": "❌ unfixed", "survived": "🟢 survived", "skipped": "⏭ skipped"}
+STATUS_ICON = {"fixed": "✅ fixed", "unfixed": "❌ unfixed", "survived": "🟢 survived", "skipped": "⏭ skipped",
+               "unreachable": "⚠️ unreachable"}
 
 
 @dataclass
@@ -56,7 +57,7 @@ def pr_body(summary: dict, package: str) -> str:
     ]
     for o in outs:
         after = {"fixed": "survives (replayed)", "survived": "survives", "unfixed": "still fails",
-                 "skipped": "not attempted"}[o["status"]]
+                 "skipped": "not attempted", "unreachable": "screen not reachable"}[o["status"]]
         tests = ", ".join(Path(t).stem for t in o.get("tests", [])) or "-"
         lines.append(
             f"| `{o['attack']}` | {_fault(o['attack'])} | {o['before']}: {str(o.get('before_detail', ''))[:70]} | "
@@ -107,13 +108,15 @@ def score_card(summary: dict, package: str, out: Path) -> None:
     x = w - 60 - tw - 12 - sw
     draw.text((x, 40), str(score), font=big, fill=color)
     draw.text((x + sw + 12, 128), "/100", font=small, fill=(154, 163, 184))
-    palette = {"fixed": (95, 211, 154), "survived": (141, 156, 255), "unfixed": (255, 138, 128), "skipped": (154, 163, 184)}
+    palette = {"fixed": (95, 211, 154), "survived": (141, 156, 255), "unfixed": (255, 138, 128),
+               "skipped": (154, 163, 184), "unreachable": (240, 192, 96)}
     y = 220
     for o in outs:
         draw.rounded_rectangle((60, y, w - 60, y + 54), radius=10, fill=(30, 36, 54))
         draw.text((84, y + 12), o["attack"], font=font(28), fill=(231, 234, 243))
         label = {"fixed": f"fixed  {o.get('before')} → survives", "survived": "survived",
-                 "unfixed": f"unfixed ({o.get('before')})", "skipped": "skipped"}[o["status"]]
+                 "unfixed": f"unfixed ({o.get('before')})", "skipped": "skipped",
+                 "unreachable": "screen unreachable"}[o["status"]]
         draw.text((520, y + 12), label, font=font(28), fill=palette[o["status"]])
         if o.get("commit"):
             draw.text((w - 240, y + 12), o["commit"][:8], font=font(26), fill=(154, 163, 184))

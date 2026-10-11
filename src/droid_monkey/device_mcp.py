@@ -25,6 +25,16 @@ from .tools.device import Device
 DIALOG_BUTTONS = ("android:id/button1", "android:id/button2", "android:id/button3")
 
 
+def replay_step(node: ui.Node, selector: str) -> str:
+    """The step stored in paths: the selector plus the visible label as a fallback; dialog buttons are optional,
+    because a fix may change or remove a dialog."""
+    sel = selector
+    if node.text and not selector.startswith("text:"):
+        sel += f"|text:{node.text.casefold()}"
+    verb = "tap?" if selector.startswith("android:id/button") else "tap"
+    return f"{verb} {sel}"
+
+
 class GraphRecorder:
     def __init__(self, app_dir: Path, source_dir: Path, out: Path):
         cfg = config_mod.load(app_dir)
@@ -157,7 +167,7 @@ class GraphRecorder:
         action = ActionInfo(selector=selector, label=self._label(before, node), group=_group(node))
         granted_before = self.ctx.device.runtime_permissions()
         logcat.clear(self.ctx.adb)
-        self.run_step(f"tap {selector}")
+        self.run_step(replay_step(node, selector))
         after, seconds, progress = self.d.settle()
         action.settle_seconds = round(max(0.0, seconds - self.baseline), 1)
         action.showed_progress = progress

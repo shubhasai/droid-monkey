@@ -43,11 +43,21 @@ class Screen:
     nodes: list[Node]
 
     def find(self, selector: str) -> Node | None:
-        """Find by resource-id, then exact text, then content-desc. `text:` / `desc:` prefixes force one kind."""
+        """Find by resource-id, then text, then content-desc. `text:` / `desc:` force one kind (case-insensitive).
+        `a|b|c` tries alternatives in order, so a step survives a UI change (e.g. a View dialog button becoming a
+        Compose button with the same label)."""
+        if "|" in selector:
+            for alt in selector.split("|"):
+                node = self.find(alt)
+                if node:
+                    return node
+            return None
         if selector.startswith("text:"):
-            return next((n for n in self.nodes if n.text == selector[5:]), None)
+            want = selector[5:].casefold()
+            return next((n for n in self.nodes if n.text.casefold() == want and n.area > 0), None)
         if selector.startswith("desc:"):
-            return next((n for n in self.nodes if n.desc == selector[5:]), None)
+            want = selector[5:].casefold()
+            return next((n for n in self.nodes if n.desc.casefold() == want and n.area > 0), None)
         for match in (lambda n: n.rid == selector, lambda n: n.text == selector, lambda n: n.desc == selector):
             node = next((n for n in self.nodes if match(n) and n.area > 0), None)
             if node:

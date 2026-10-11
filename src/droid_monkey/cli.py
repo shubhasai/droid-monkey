@@ -364,7 +364,8 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
                      resume=bool(resume_id), echo=click.echo, fail_first_fix=fail_first_fix)
     click.echo("")
     for o in final.get("outcomes", []):
-        color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow"}.get(o["status"])
+        color = {"fixed": "green", "unfixed": "red", "survived": "white", "skipped": "yellow",
+                 "unreachable": "yellow"}.get(o["status"])
         extra = f"  {o['commit'][:8]}" + (f" checkpoint {o['checkpoint']}" if o.get("checkpoint") else "") if o.get("commit") else ""
         click.echo(f"  {o['attack']:28} " + click.style(f"{o['status']:9}", fg=color) + f" was {o['before']}{extra}")
     click.echo(f"branch: {final.get('branch')}   evidence: {ctx.run_dir}")

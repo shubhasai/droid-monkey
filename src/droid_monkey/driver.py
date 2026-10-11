@@ -96,7 +96,7 @@ class AppDriver:
             x, y = arg[3:].split(",")
             self.adb.shell(f"input tap {x} {y}")
         elif verb in ("tap", "tap?"):
-            node = ui.wait_for(self.adb, arg, timeout=3 if verb == "tap?" else 12)
+            node = ui.wait_for(self.adb, arg, timeout=8 if verb == "tap?" else 12)
             if node is None:
                 if verb == "tap?":
                     return

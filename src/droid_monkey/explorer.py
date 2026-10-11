@@ -230,8 +230,10 @@ class Explorer:
             return None
 
         if any(after.find(b) for b in DIALOG_BUTTONS) and not any(screen.find(b) for b in DIALOG_BUTTONS):
-            action.effect, action.dialog_dismiss = "dialog", "tap android:id/button1"
-            self.d.step("tap android:id/button1")
+            ok = after.find("android:id/button1")
+            label = f"|text:{ok.text.casefold()}" if ok and ok.text else ""
+            action.effect, action.dialog_dismiss = "dialog", f"tap? android:id/button1{label}"
+            self.d.step(action.dialog_dismiss)
             after, _, _ = self.d.settle()
 
         if after.foreground_package() not in ("", self.cfg.package):
