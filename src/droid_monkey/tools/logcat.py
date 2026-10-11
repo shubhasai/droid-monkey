@@ -69,6 +69,34 @@ def read_crashes(adb: Adb, package: str) -> list[Crash]:
     anr = adb.run("logcat", "-d", "-b", "main,system,events")
     for line in anr.splitlines():
         if (f"ANR in {package}" in line) or ("am_anr" in line and package in line):
-            crashes.append(Crash(kind="anr", exception="ANR", message=_strip(line), raw=line))
+            crash = Crash(kind="anr", exception="ANR", message=_strip(line), raw=line)
+            _add_anr_trace(adb, package, crash)
+            crashes.append(crash)
             break
     return crashes
+
+
+def _add_anr_trace(adb: Adb, package: str, crash: Crash) -> None:
+    """Android saves every ANR, with the stack of each thread, in the dropbox; shell can read it without root.
+    The main thread's frames say exactly what was blocking it."""
+    out = adb.run("shell", "dumpsys dropbox --print data_app_anr", check=False, timeout=60)
+    entries = [e for e in split_dropbox(out) if f"Process: {package}" in e]
+    if not entries:
+        return
+    reason, frames = parse_anr_trace(entries[-1])
+    crash.message = reason or crash.message
+    crash.frames = frames
+    crash.raw = entries[-1][:30000]
+
+
+def split_dropbox(out: str) -> list[str]:
+    """Entries of `dumpsys dropbox --print`, oldest first: each starts after a line of '=' with its date line."""
+    return [e for e in re.split(r"^=+\s*$", out, flags=re.M)[1:] if e.strip()]
+
+
+def parse_anr_trace(entry: str) -> tuple[str, list[str]]:
+    """(reason, main-thread frames) from one dropbox data_app_anr entry."""
+    reason = re.search(r"^(?:Subject|Reason): (.+)$", entry, flags=re.M)
+    main = re.search(r'^"main".*?(?=^\s*$)', entry, flags=re.M | re.S)
+    frames = [ln.strip()[3:] for ln in main.group(0).splitlines() if ln.strip().startswith("at ")] if main else []
+    return (reason.group(1).strip() if reason else ""), frames

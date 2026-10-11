@@ -243,6 +243,11 @@ class Device:
             raise AdbError(f"expected a cold start, Android reported {launch_state}")
         return int(ms.group(1)), launch_state
 
+    def poke(self) -> None:
+        """A key press the app ignores (Shift), sent without waiting for it to be handled. Android raises an input ANR
+        when an event waits 5 s for a blocked main thread, so this turns a long freeze into a real ANR."""
+        self.adb.shell("setsid nohup sh -c 'input keyevent 59' > /dev/null 2>&1 < /dev/null &", check=False)
+
     def background(self, seconds: float) -> None:
         """Leave the app (Home) and come back after `seconds`, without killing it."""
         self.home()

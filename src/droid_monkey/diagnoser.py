@@ -42,6 +42,8 @@ what breaks.
 An attack just failed on the app. Find the root cause in the code: the design mistake that makes the app fail under
 this fault, not just the line that threw. Use the tools to read the code; cite file:line for every claim.
 
+For 'anr' (Android declared the app not responding), the evidence includes the main thread's stack at the moment
+of the ANR: the topmost app frame is what was blocking it.
 For 'froze' (frames over 700 ms) and 'leaked' (destroyed Activities still alive after a forced GC) there is no stack
 trace: start from the Perfetto analysis. For a freeze, the main thread's state inside the long slice tells you the
 kind of work: 'sleeping/blocked' means a blocking call on the main thread (Thread.sleep, a lock, runBlocking, a

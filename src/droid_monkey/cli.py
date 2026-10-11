@@ -293,10 +293,12 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
 @click.option("--build/--no-build", default=None, help="Build and install the app first. Default: only when the "
                                                        "installed app was not built from the current source.")
 @click.option("--run-id", default=None, help="Evidence folder name under .droid-monkey/runs/.")
+@click.option("--screens", type=int, default=None, help="Built-in attacks run on this many of their best screens "
+                                                      "(default: screens_per_attack in monkey.yaml, else 2).")
 @click.option("--diagnose", is_flag=True, help="For each failure, find the root cause and print the suggested fix "
                                                "with its evidence (no code is changed).")
 def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_explore: bool, build: bool,
-           run_id: str | None, diagnose: bool) -> None:
+           run_id: str | None, screens: int | None, diagnose: bool) -> None:
     """Run an attack: a built-in one, a saved spec by name, `builtin`, `custom` or `all`. No fixing."""
     theme.banner(f"attack {name}")
     best = None
@@ -333,12 +335,34 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
     else:
         raise click.ClickException(f"unknown attack {name!r}. Built-in: {sorted(BUILTIN)}; saved specs: {sorted(saved) or 'none'}")
 
+    # Built-in attacks run on their best N screens, unless --target/--action pins one.
+    per_screen: dict[str, list[dict]] = {}
+    if target is None and action is None:
+        for a in scenarios_mod.builtin_attacks(smap, known, screens or ctx.cfg.screens_per_attack):
+            per_screen.setdefault(a["base"], []).append(a)
+
     results = []
     for attack_name in names:
         if attack_name in saved:
             spec = saved[attack_name]
             theme.header(attack_name, "(>.<)")
             click.echo(style(f"  {spec.description}", fg="bright_black"))
+        elif attack_name in per_screen:
+            for a in per_screen[attack_name]:
+                spec, best = a["spec"], None
+                theme.header(a["name"], "(>.<)")
+                click.echo(style(f"  {a['reason']}", fg="bright_black"))
+                with theme.working(f"monkeying with the app: {a['name']}..."):
+                    result = SpecRunner(ctx, spec).run()
+                results.append(result)
+                _echo_result(a["name"], result)
+                if diagnose and result.outcome not in ("survived", "skipped"):
+                    _suggest_fix(ctx, smap, spec, result, a["reason"])
+            continue
+        elif target is None and action is None:
+            theme.header(attack_name, "(>.<)")
+            click.echo(f"  {theme.badge('skipped')} the explorer found nowhere to apply it")
+            continue
         else:
             best = scenarios_mod.best(candidates, attack_name)
             if target:
@@ -467,6 +491,54 @@ def attacks_suggest(app_dir: Path, count: int, try_on_device: bool) -> None:
     _design(app_dir, suggest_goal(count), "suggested", try_on_device, max_tries=count * 2 + 1)
 
 
+@attacks.command("from-flows")
+@APP_DIR
+@click.option("--max", "limit", default=6, show_default=True, help="Design at most this many flow attacks.")
+@click.option("--try/--no-try", "try_on_device", default=True, help="Try each spec on the emulator before saving.")
+def attacks_from_flows(app_dir: Path, limit: int, try_on_device: bool) -> None:
+    """Turn the user flows and risks from `analyze` into attacks: one validated, tried spec per risk, walking that
+    flow and injecting that fault at the moment the analysis named."""
+    from .designer import Designer, flow_goal, flow_risks, load_flows
+    ctx = _context(app_dir, time.strftime("flows-%Y%m%d-%H%M%S"))
+    theme.banner("attacks from user flows")
+    smap, prof, saved, known = _load_app(ctx)
+    flows = load_flows(ctx.cfg.app_dir)
+    if not flows:
+        raise click.ClickException("no flows yet: run `droid-monkey analyze` first")
+    todo = flow_risks(flows, saved)
+    theme.kv("flows", f"{len(flows)} flows, {sum(len(f.get('risks', [])) for f in flows)} risks, "
+                      f"{len(todo)} not covered yet" + (f"; designing {limit}" if len(todo) > limit else ""))
+    total_in = total_out = 0
+    rows = []
+    for flow, risk in todo[:limit]:
+        theme.header(f"{flow.get('name')}: {risk.get('fault')}", "(>.<)")
+        click.echo(style(f"  {risk.get('why', '')[:150]}", fg="bright_black"))
+        designer = Designer(ctx, smap, prof, flows, saved, allow_try=try_on_device, max_tries=3)
+        with theme.working("the monkey is scheming..."):
+            res = designer.run(flow_goal(flow, risk), "flow")
+        total_in, total_out = total_in + res.input_tokens, total_out + res.output_tokens
+        for t in res.tries:
+            click.echo(f"  {theme.badge(t.get('outcome') or '?')} {style(f'{t['spec']:30}', bold=True)} "
+                       + style((t.get('exception') or t.get('reason') or '')[:90], fg="bright_black"))
+        if res.saved:
+            for p in res.saved:
+                theme.ok(f"saved {p.name}")
+            for p in res.saved:  # so the next flow's designer knows it exists
+                try:
+                    saved[p.stem] = specs_mod.parse(p.read_text(), known)
+                except specs_mod.SpecError:
+                    pass
+        else:
+            theme.warn(f"nothing saved: {res.summary[:200]}")
+        rows.append((flow.get("name"), risk.get("fault"), [p.stem for p in res.saved]))
+    theme.header("flow coverage")
+    for name, fault, specs_saved in rows:
+        click.echo(f"  {name:30} {fault:18} {', '.join(specs_saved) or style('not reproducible', fg='yellow')}")
+    from .pricing import cost_usd
+    theme.kv("cost", f"{total_in:,} in / {total_out:,} out tokens, ~${cost_usd(ctx.cfg.llm.model, total_in, total_out) or 0:.3f}")
+    click.echo("these run in every `droid-monkey run` from now on")
+
+
 @attacks.command("new")
 @click.argument("prompt")
 @APP_DIR
@@ -490,8 +562,11 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
 @click.option("--no-compile-tool", is_flag=True, help="Do not give the coder the compile tool (for comparisons).")
 @click.option("--auto-fix", is_flag=True, help="Fix without asking (CI, benchmarks). By default each fix is shown "
                                                  "with its evidence and suggested change, and waits for your yes.")
+@click.option("--screens", type=int, default=None, help="Built-in attacks run on this many of their best screens "
+                                                      "(default: screens_per_attack in monkey.yaml, else 2).")
 def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None,
-        fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool, agent: str | None) -> None:
+        fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool, agent: str | None,
+        screens: int | None) -> None:
     """The full loop: plan, attack, diagnose, ask you, fix with the coding agent, verify by replay, commit."""
     from . import approval
     theme.banner("run")
@@ -517,7 +592,7 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     names = [n.strip() for n in only.split(",")] if only else None
     final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model, agent=backend,
                      resume=bool(resume_id), echo=theme.loop_echo, fail_first_fix=fail_first_fix, naive=naive,
-                     compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask)
+                     compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask, screens_per_attack=screens or ctx.cfg.screens_per_attack)
     from .report import score_of
     outcomes = final.get("outcomes", [])
     theme.header("scoreboard", "(^o^)")

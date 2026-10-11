@@ -63,6 +63,7 @@ ACTIONS: dict[str, str] = {
     "settle": "float:1:30",     # wait until the screen stops changing, at most this long
     "accept_permission": "bool",  # tap Allow if a system permission prompt is showing
     "scroll": "choice:down|up",  # swipe the screen's main list once
+    "poke": "bool",             # a harmless key press, without waiting; if the main thread is blocked, Android declares an ANR after 5 s
     "back": "bool",
     "home": "bool",
     "restart_to_screen": "bool",  # fresh launch, then walk back to the spec's start screen (e.g. after a revoke kills the app)

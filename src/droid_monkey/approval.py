@@ -16,7 +16,7 @@ def proposal(item: dict, result: dict, diagnosis: dict) -> dict:
     """Everything the developer needs to decide, from data droid-monkey measured, not from the model alone."""
     evidence = []
     if result.get("crash_signature"):
-        evidence.append(f"crash: {result.get('exception')} at {result['crash_signature']}")
+        evidence.append(f"{'ANR' if result.get('outcome') == 'anr' else 'crash'}: {result['crash_signature']}")
         evidence += [f"  {f}" for f in (result.get("app_frames") or [])[:5]]
     for name, (was, now) in (result.get("lost_fields") or {}).items():
         evidence.append(f"field {name}: '{was}' -> '{now}'")
@@ -38,7 +38,8 @@ def proposal(item: dict, result: dict, diagnosis: dict) -> dict:
              if (shots / n).exists()]
     return {
         "attack": item["name"], "why": item.get("reason", ""), "outcome": result.get("outcome"),
-        "detail": result.get("exception") or result.get("reason", ""),
+        "detail": (result.get("reason") if result.get("outcome") == "anr" else result.get("exception"))
+                  or result.get("reason", ""),
         "evidence": evidence, "evidence_files": files,
         "summary": diagnosis.get("summary", ""), "root_cause": diagnosis.get("root_cause", ""),
         "files_to_change": diagnosis.get("files_to_change", []), "fix_approach": diagnosis.get("fix_approach", ""),

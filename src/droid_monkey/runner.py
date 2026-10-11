@@ -218,6 +218,8 @@ class SpecRunner:
             d.adb.shell("input keyevent 4")
         elif key == "scroll":
             d.scroll(value)
+        elif key == "poke" and value:
+            self.device.poke()
         elif key == "home" and value:
             self.device.home()
         elif key == "restart_to_screen" and value:

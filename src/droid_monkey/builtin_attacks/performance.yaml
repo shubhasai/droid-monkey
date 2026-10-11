@@ -2,7 +2,7 @@
 # A step whose placeholder has no value for this app is dropped.
 name: performance
 fault_type: performance
-description: Load the CPU like a busy mid-range phone, then scroll the screen and use its slowest action; the UI must never freeze.
+description: Load the CPU like a busy mid-range phone, then scroll the screen and use its slowest action; the UI must never freeze, and a key press during the action must not end in an ANR.
 screen: "{screen}"
 trace: true
 steps:
@@ -11,5 +11,8 @@ steps:
   - scroll: down
   - scroll: up
   - tap: "{action}"
+  - poke: true
+  - wait: 6
+  - poke: true
   - settle: "{settle}"
 expect: [no_crash, smooth]

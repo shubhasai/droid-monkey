@@ -97,3 +97,40 @@ def generate(smap: ScreenMap) -> list[Candidate]:
 
 def best(candidates: list[Candidate], attack: str) -> Candidate | None:
     return next((c for c in candidates if c.attack == attack), None)
+
+
+def top(candidates: list[Candidate], attack: str, n: int) -> list[Candidate]:
+    """The n best candidates for an attack, on n different screens."""
+    out, seen = [], set()
+    for c in candidates:
+        if c.attack == attack and c.screen not in seen:
+            out.append(c)
+            seen.add(c.screen)
+            if len(out) == n:
+                break
+    return out
+
+
+def attack_name(base: str, screen: str, rank: int) -> str:
+    """The best screen keeps the attack's own name; the others are named after their screen."""
+    if rank == 0:
+        return base
+    import re
+    return re.sub(r"[^a-z0-9_]", "_", f"{base}_on_{screen}".lower())[:60]
+
+
+def builtin_attacks(smap: ScreenMap, known, screens_per_attack: int = 2) -> list[dict]:
+    """Every built-in attack rendered for this app on its best `screens_per_attack` screens:
+    [{name, base, screen, reason, spec}]. Startup has a single target, the launch screen."""
+    from . import specs as specs_mod
+    candidates = generate(smap)
+    items = []
+    for base, template in specs_mod.builtin_templates().items():
+        for rank, c in enumerate(top(candidates, base, screens_per_attack)):
+            try:
+                spec = specs_mod.render(template, c.values(), known)
+            except specs_mod.SpecError:
+                continue
+            spec.name = attack_name(base, c.screen, rank)
+            items.append({"name": spec.name, "base": base, "screen": c.screen, "reason": c.reason, "spec": spec})
+    return items

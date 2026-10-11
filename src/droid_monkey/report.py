@@ -37,7 +37,7 @@ def score_of(outcomes: list[dict]) -> int:
 
 
 def _fault(name: str) -> str:
-    t = specs_mod.builtin_templates().get(name)
+    t = specs_mod.builtin_templates().get(name.split("_on_")[0])
     return t["fault_type"] if t else "custom"
 
 
@@ -134,6 +134,61 @@ def score_card(summary: dict, package: str, out: Path) -> None:
     img.save(out)
 
 
+PROBLEMS = ("crashed", "anr", "lost_state", "no_feedback", "leaked", "froze", "slow_start")
+
+
+def receipt_data(summary: dict) -> dict:
+    outs = summary.get("outcomes", [])
+    m = [o.get("metrics") or {} for o in outs]
+    found: dict[str, int] = {}
+    for o in outs:
+        if o.get("before") in PROBLEMS:
+            found[o["before"]] = found.get(o["before"], 0) + 1
+    by = lambda s: sum(1 for o in outs if o["status"] == s)
+    reasoning = summary.get("reasoning") or {}
+    diag_tokens = sum(x.get("diag_tokens", 0) for x in m)
+    diag_cost = sum(x.get("diag_cost_usd", 0.0) for x in m)
+    agent = summary.get("coder_agent", "claude")
+    return {
+        "attacks": len(outs), "screens": len({x["screen"] for x in m if x.get("screen")}),
+        "found": found, "fixed": by("fixed"), "first_try": sum(1 for o in outs if o["status"] == "fixed"
+                                                                and o.get("attempts", 0) == 1),
+        "declined": by("declined"), "unfixed": by("unfixed"), "survived": by("survived"),
+        "unreachable": by("unreachable"), "minutes": round((summary.get("seconds") or sum(x.get("seconds", 0) for x in m)) / 60, 1),
+        "reasoning_model": reasoning.get("model", summary.get("diagnoser_model", "?")),
+        "reasoning_tokens": (reasoning.get("input_tokens") or 0) + (reasoning.get("output_tokens") or 0),
+        "reasoning_cost": reasoning.get("cost_usd") or 0.0, "diag_tokens": diag_tokens, "diag_cost": diag_cost,
+        "coder_agent": agent, "coder_model": summary.get("coder_model", "?"),
+        "coder_sessions": sum(x.get("attempts", 0) for x in m), "coder_tokens": sum(x.get("coder_tokens", 0) for x in m),
+        "coder_cost": sum(x.get("coder_cost_usd", 0.0) for x in m),
+        "coder_billing": "API" if agent == "api" else ("Codex plan" if agent == "codex" else "Claude plan, API-equivalent"),
+    }
+
+
+def receipt(summary: dict, package: str) -> str:
+    """What the run found and fixed, and what it cost, per step."""
+    r = receipt_data(summary)
+    found = ", ".join(f"{n} {k}" for k, n in sorted(r["found"].items(), key=lambda kv: -kv[1])) or "nothing"
+    api = r["reasoning_cost"] + r["diag_cost"] + (r["coder_cost"] if r["coder_agent"] == "api" else 0.0)
+    plan = 0.0 if r["coder_agent"] == "api" else r["coder_cost"]
+    rows = [
+        ("attacks", f"{r['attacks']}" + (f" on {r['screens']} screen{'s' if r['screens'] != 1 else ''}" if r["screens"] else "")),
+        ("found", f"{sum(r['found'].values())} problems: {found}"),
+        ("fixed", f"{r['fixed']} ({r['first_try']} on the first try) · declined {r['declined']} · unfixed {r['unfixed']}"),
+        ("survived", f"{r['survived']}" + (f" · unreachable {r['unreachable']}" if r["unreachable"] else "")),
+        ("time", f"{r['minutes']} min"),
+        ("plan + decide", f"{r['reasoning_model']}, {r['reasoning_tokens']:,} tokens, ${r['reasoning_cost']:.4f} (API)"),
+        ("diagnosis", f"{r['reasoning_model']}, {r['diag_tokens']:,} tokens, ${r['diag_cost']:.4f} (API)"),
+        ("fixes", f"{r['coder_agent']} / {r['coder_model']}, {r['coder_sessions']} sessions, {r['coder_tokens']:,} tokens, "
+                  f"${r['coder_cost']:.2f} ({r['coder_billing']})"),
+        ("total", f"${api:.4f} API" + (f" + ${plan:.2f} {r['coder_billing']}" if plan else "")),
+    ]
+    width = max(len(k) for k, _ in rows)
+    lines = [f"droid-monkey receipt · run {summary.get('run_id')} · {package}", ""]
+    lines += [f"{k:<{width}}  {v}" for k, v in rows]
+    return "\n".join(lines) + "\n"
+
+
 def dashboard(summary: dict, package: str, run_dir: Path, out: Path) -> None:
     outs = summary.get("outcomes", [])
     rows = []
@@ -142,12 +197,27 @@ def dashboard(summary: dict, package: str, run_dir: Path, out: Path) -> None:
         ev = run_dir / o["attack"]
         shots = "".join(f'<figure><img src="{o["attack"]}/{n}.png" alt="{n}"><figcaption>{n}</figcaption></figure>'
                         for n in ("before", "after") if (ev / f"{n}.png").exists())
+        extras = []
+        if (ev / "trace-analysis.txt").exists():
+            extras.append(f"<details><summary>Perfetto analysis</summary><pre>{html.escape((ev / 'trace-analysis.txt').read_text())}"
+                          f"</pre><p class='meta'>trace: <a href='{o['attack']}/trace.perfetto-trace'>trace.perfetto-trace</a>"
+                          " · open it at <a href='https://ui.perfetto.dev'>ui.perfetto.dev</a></p></details>")
+        if (ev / "logcat.txt").exists():
+            extras.append(f"<details><summary>crash log</summary><pre>{html.escape((ev / 'logcat.txt').read_text()[:6000])}</pre></details>")
+        if o["status"] == "declined" and d:
+            extras.append(f"<p><b>Suggested fix (not applied).</b> {html.escape(d.get('fix_approach', ''))} "
+                          f"<span class='meta'>files: {html.escape(', '.join(d.get('files_to_change', [])))}</span></p>")
+        if d.get("evidence"):
+            extras.append("<details><summary>code evidence</summary><ul>" + "".join(
+                f"<li><code>{html.escape(e)}</code></li>" for e in d["evidence"][:8]) + "</ul></details>")
+        shots += ""
         rows.append(f"""<section class="card {o['status']}">
   <header><h2>{html.escape(o['attack'])}</h2><span class="pill">{html.escape(o['status'])}</span></header>
   <p class="meta">was <b>{html.escape(o['before'])}</b>: {html.escape(str(o.get('before_detail', '')))}</p>
   {f"<p><b>Root cause.</b> {html.escape(d.get('root_cause', ''))}</p><p><b>Fix.</b> {html.escape(d.get('fix_approach', ''))}</p>" if d else ""}
   {f"<p class='meta'>commit <code>{o['commit'][:8]}</code> · Entire checkpoint <code>{o.get('checkpoint') or '-'}</code> · tests {', '.join(Path(t).stem for t in o.get('tests', []))} · attempts {o.get('attempts', 0)}</p>" if o.get('commit') else ""}
   <div class="shots">{shots}</div>
+  {''.join(extras)}
 </section>""")
     out.write_text(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>droid-monkey run {html.escape(summary['run_id'])}</title>
@@ -161,10 +231,13 @@ main{{max-width:960px;margin:0 auto;display:grid;gap:16px}} h1{{margin:0}} .mute
 .pill{{font:600 12px ui-monospace,monospace;padding:4px 8px;border-radius:6px;border:1px solid var(--line)}}
 .fixed .pill{{color:var(--ok)}} .unfixed .pill{{color:var(--bad)}} .shots{{display:flex;gap:12px;flex-wrap:wrap}}
 figure{{margin:0}} img{{width:180px;border-radius:8px;border:1px solid var(--line)}} figcaption{{font-size:12px;color:var(--muted)}}
+pre{{white-space:pre-wrap;font:12px/1.45 ui-monospace,monospace;background:var(--bg);padding:10px;border-radius:8px;overflow-x:auto}}
+details{{margin-top:8px}} summary{{cursor:pointer;color:var(--acc)}} a{{color:var(--acc)}}
 </style></head><body><main>
 <h1>droid-monkey · {html.escape(package)}</h1>
 <p class="muted">run {html.escape(summary['run_id'])} · branch {html.escape(str(summary.get('branch')))}</p>
 <div class="score">{score_of(outs)}<span class="muted" style="font-size:20px">/100 resilience</span></div>
+<section class="card"><header><h2>Receipt</h2></header><pre>{html.escape(receipt(summary, package))}</pre></section>
 {''.join(rows)}
 </main></body></html>""")
 

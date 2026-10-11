@@ -23,6 +23,7 @@ from .driver import Context
 from .explorer import ScreenMap
 from .profile import AppProfile
 from .runner import SpecRunner
+from .pricing import cost_usd
 from .tools import gradle, git
 
 MAX_FIX_ATTEMPTS = 2
@@ -54,6 +55,10 @@ class RunState(TypedDict, total=False):
     outcomes: list[dict]
     approval: str
     auto_fix_all: bool
+    started: float             # run start, for the receipt
+    reason_in: int             # droid-monkey's own model calls (plan, decide), for the receipt
+    reason_out: int
+    diag_cost: float
     home_branch: str           # the branch the developer was on; the run returns there at the end
     base: str
     log: list[str]
@@ -71,8 +76,10 @@ def _subject(summary: str, limit: int = 72) -> str:
 class Loop:
     def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
                  only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False,
-                 naive: bool = False, compile_tool: bool = True, auto_fix: bool = False, agent: str = "claude"):
+                 naive: bool = False, compile_tool: bool = True, auto_fix: bool = False, agent: str = "claude",
+                 screens_per_attack: int = 2):
         self.agent = agent
+        self.screens_per_attack = screens_per_attack
         self.compile_tool = compile_tool
         self.auto_fix = auto_fix
         self.ctx, self.cfg, self.smap, self.profile = ctx, ctx.cfg, smap, profile
@@ -93,8 +100,16 @@ class Loop:
 
     def ask_json(self, prompt: str) -> dict:
         reply = self.llm().invoke(prompt)
+        u = getattr(reply, "usage_metadata", None) or {}
+        self._usage = (int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0))
         m = re.search(r"\{.*\}|\[.*\]", reply.text, flags=re.S)
         return json.loads(m.group(0)) if m else {}
+
+    def usage(self, state: RunState) -> RunState:
+        """Add the last ask_json call's tokens to the run's totals (state, so they survive a resume)."""
+        tin, tout = getattr(self, "_usage", (0, 0))
+        self._usage = (0, 0)
+        return {"reason_in": state.get("reason_in", 0) + tin, "reason_out": state.get("reason_out", 0) + tout}
 
     def with_watchdog(self, state: RunState, what: str, fn):
         """Run fn(); if adb or the emulator hangs, restart the emulator, reinstall the app, and retry once."""
@@ -133,24 +148,15 @@ class Loop:
         gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
         log = self.note(state, f"setup: branch {branch} from {base[:8]}, built and installed in {build.seconds:.0f}s")
         return {"branch": branch, "home_branch": home, "base": base, "last_good": base, "index": 0, "outcomes": [],
-                "log": log}
+                "log": log, "started": time.time()}
 
     def plan(self, state: RunState) -> RunState:
-        candidates = scenarios_mod.generate(self.smap)
-        items = []
-        for name, template in specs_mod.builtin_templates().items():
-            best = scenarios_mod.best(candidates, name)
-            if best is None:
-                continue
-            try:
-                spec = specs_mod.render(template, best.values(), self.known)
-            except specs_mod.SpecError:
-                continue
-            items.append({"name": name, "reason": best.reason, "spec_yaml": spec.to_yaml()})
+        items = [{"name": a["name"], "base": a["base"], "reason": a["reason"], "spec_yaml": a["spec"].to_yaml()}
+                 for a in scenarios_mod.builtin_attacks(self.smap, self.known, self.screens_per_attack)]
         for name, spec in self.saved.items():
-            items.append({"name": name, "reason": spec.description, "spec_yaml": spec.to_yaml()})
-        if self.only:
-            items = [i for i in items if i["name"] in self.only]
+            items.append({"name": name, "base": name, "reason": spec.description, "spec_yaml": spec.to_yaml()})
+        if self.only:  # an attack's own name selects it on every screen it runs on
+            items = [i for i in items if i["name"] in self.only or i["base"] in self.only]
 
         listing = "\n".join(f"- {i['name']}: {i['reason']}" for i in items)
         signals = "\n".join(f"- {s.kind} at {s.file}:{s.line}" for s in self.profile.signals) or "- none"
@@ -169,7 +175,7 @@ class Loop:
             queue = items
             self.echo(f"plan: model answer unusable ({e}); using the generated order")
         log = self.note(state, "plan:\n" + "\n".join(f"  {n + 1}. {q['name']}: {q['reason']}" for n, q in enumerate(queue)))
-        return {"queue": queue, "log": log}
+        return {"queue": queue, "log": log, **self.usage(state)}
 
     def pick(self, state: RunState) -> RunState:
         i = state.get("index", 0)
@@ -177,7 +183,7 @@ class Loop:
             return {"current": {}}
         item = state["queue"][i]
         return {"current": item, "attempts": 0, "diagnosis": None, "coder_session": None, "coder_cost": 0.0,
-                "failure_note": "", "attack_started": time.time(), "diag_tokens": 0, "coder_tokens": 0, "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
+                "failure_note": "", "attack_started": time.time(), "diag_tokens": 0, "diag_cost": 0.0, "coder_tokens": 0, "log": self.note(state, f"\n== attack {i + 1}/{len(state['queue'])}: {item['name']}")}
 
     def attack(self, state: RunState) -> RunState:
         from .driver import NavigationError
@@ -219,7 +225,8 @@ class Loop:
         if decision not in options:  # code enforces the allowed moves
             decision = options[0]
             reason = f"fallback rule ({reason or 'invalid choice'})"
-        return {"decision": decision, "decision_reason": reason, "log": self.note(state, f"decide: {decision}: {reason}")}
+        return {"decision": decision, "decision_reason": reason, "log": self.note(state, f"decide: {decision}: {reason}"),
+                **self.usage(state)}
 
     def diagnose(self, state: RunState) -> RunState:
         from .diagnoser import Diagnosis, diagnose
@@ -235,7 +242,8 @@ class Loop:
                      failure_note=state.get("failure_note", ""))
         log = self.note(state, f"diagnose: {d.root_cause}\n  files: {d.files_to_change}\n  test: {d.test_plan[:160]}")
         out = {"diagnosis": d.to_dict(), "log": log,
-               "diag_tokens": state.get("diag_tokens", 0) + d.input_tokens + d.output_tokens}
+               "diag_tokens": state.get("diag_tokens", 0) + d.input_tokens + d.output_tokens,
+               "diag_cost": state.get("diag_cost", 0.0) + (cost_usd(self.cfg.llm.model, d.input_tokens, d.output_tokens) or 0.0)}
         if not state.get("diagnosis"):  # first diagnosis of this attack
             out["first_diagnosis"] = {**d.to_dict(), "attack": state["current"]["name"]}
         return out
@@ -355,13 +363,16 @@ class Loop:
         res = state["result"]
         status = {"survived": "survived", "unreachable": "unreachable"}.get(res["outcome"], "skipped")
         outcome = {"attack": state["current"]["name"], "status": status, "before": res["outcome"],
-                   "before_detail": res.get("crash_signature") or res["reason"], "reason": state.get("decision_reason", "")}
+                   "before_detail": res.get("crash_signature") or res["reason"], "reason": state.get("decision_reason", ""),
+                   "metrics": self.metrics(state)}
         return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1}
 
     def metrics(self, state: RunState) -> dict:
         return {"seconds": round(time.time() - state.get("attack_started", time.time()), 1),
-                "diag_tokens": state.get("diag_tokens", 0), "coder_tokens": state.get("coder_tokens", 0),
-                "coder_cost_usd": round(state.get("coder_cost", 0.0), 3), "attempts": state.get("attempts", 0)}
+                "diag_tokens": state.get("diag_tokens", 0), "diag_cost_usd": round(state.get("diag_cost", 0.0), 5),
+                "coder_tokens": state.get("coder_tokens", 0),
+                "coder_cost_usd": round(state.get("coder_cost", 0.0), 3), "attempts": state.get("attempts", 0),
+                "screen": self.spec(state["current"]).screen if state.get("current", {}).get("spec_yaml") else None}
 
     def report(self, state: RunState) -> RunState:
         out = paths.run_dir(self.cfg.app_dir, state["run_id"])
@@ -370,10 +381,17 @@ class Loop:
             "run_id": state["run_id"], "branch": state.get("branch"),
             "mode": "naive" if self.naive else "droid-monkey", "diagnoser_model": self.cfg.llm.model,
             "coder_model": self.coder_model, "coder_agent": self.agent, "coder_compile_tool": self.compile_tool,
+            "seconds": round(time.time() - state.get("started", time.time()), 1),
+            "reasoning": {"model": self.cfg.llm.model, "input_tokens": state.get("reason_in", 0),
+                          "output_tokens": state.get("reason_out", 0),
+                          "cost_usd": cost_usd(self.cfg.llm.model, state.get("reason_in", 0), state.get("reason_out", 0))},
             "outcomes": state.get("outcomes", [])}, indent=2))
         (out / "log.txt").write_text("\n".join(state.get("log", [])))
+        from . import report as report_mod
+        receipt = report_mod.receipt(json.loads((out / "summary.json").read_text()), self.cfg.package)
+        (out / "receipt.md").write_text(receipt)
         fixed = sum(1 for o in state.get("outcomes", []) if o["status"] == "fixed")
-        log = self.note(state, f"\nreport: {fixed} fixed of {len(state.get('outcomes', []))} attacks -> {out}")
+        log = self.note(state, f"\nreport: {fixed} fixed of {len(state.get('outcomes', []))} attacks -> {out}\n\n{receipt}")
         return {"log": log + self._go_home(state)}
 
     def _go_home(self, state: RunState) -> list[str]:
@@ -422,13 +440,13 @@ class Loop:
 def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
         only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print,
         fail_first_fix: bool = False, naive: bool = False, compile_tool: bool = True, auto_fix: bool = False,
-        ask=None, agent: str = "claude") -> dict:
+        ask=None, agent: str = "claude", screens_per_attack: int = 2) -> dict:
     """`ask(proposal) -> "yes" | "no" | "all"` answers the approval question; without it nothing is fixed unasked."""
     tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}", f"mode:{'naive' if naive else 'droid-monkey'}"])
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix, naive=naive,
-                compile_tool=compile_tool, auto_fix=auto_fix, agent=agent)
+                compile_tool=compile_tool, auto_fix=auto_fix, agent=agent, screens_per_attack=screens_per_attack)
     state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
 

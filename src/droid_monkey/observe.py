@@ -8,6 +8,7 @@ SURVIVED, CRASHED, LOST_STATE, SKIPPED = "survived", "crashed", "lost_state", "s
 NO_FEEDBACK = "no_feedback"  # survived, but the user was shown nothing (silent failure)
 LEAKED = "leaked"  # survived, but destroyed Activities (or the heap) stayed alive after a forced GC
 FROZE = "froze"    # survived, but the UI froze: frames over 700 ms, usually work on the main thread
+ANR = "anr"        # Android declared the app not responding: the main thread was blocked 5 s or more
 SLOW_START = "slow_start"  # survived, but starting the app takes longer than Play vitals call excessive
 
 
@@ -26,7 +27,9 @@ def classify(
     screen_restored: bool = True,
 ) -> Verdict:
     if crashes:
-        c = crashes[0]
+        c = next((x for x in crashes if x.kind == "crash"), crashes[0])
+        if c.kind == "anr":
+            return Verdict(ANR, f"application not responding: {c.message}"[:300], crash=c)
         return Verdict(CRASHED, f"{c.exception}: {c.message}"[:300], crash=c)
 
     lost = {k: (v, after.get(k, "")) for k, v in before.items() if v and after.get(k, "") != v}

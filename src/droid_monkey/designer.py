@@ -275,6 +275,27 @@ def new_goal(prompt: str) -> str:
             "device, fix it until it runs cleanly, and save it.")
 
 
+def flow_risks(flows: list[dict], existing: dict) -> list[tuple[dict, dict]]:
+    """(flow, risk) pairs the analysis found, minus those a saved spec already covers (same flow and fault)."""
+    covered = {(s.flow, s.fault_type) for s in existing.values() if s.flow}
+    return [(f, r) for f in flows for r in f.get("risks", [])
+            if r.get("fault") in specs_mod.FAULT_TYPES and (f.get("name"), r.get("fault")) not in covered]
+
+
+def flow_goal(flow: dict, risk: dict) -> str:
+    steps = "; ".join(flow.get("steps", []))
+    return (f"Design one attack for a risk the code analysis found on the user flow '{flow.get('name')}' "
+            f"({flow.get('description', '')}). Flow steps: {steps}. Fault: {risk.get('fault')}. Why the code is at "
+            f"risk: {risk.get('why', '')} ({risk.get('code', '')}). When to inject it: {risk.get('trigger', '')}.\n"
+            "Start on the flow's screen from the screen map, perform the flow's steps with tap/fill actions, inject the "
+            "fault at exactly that moment, and expect what a user expects (no_crash always; keeps_fields when the flow "
+            "fills a form; returns_to_screen after process death; shows_feedback when the network is lost). "
+            f"Name it flow_<short_snake_name>, and set flow: {flow.get('name')} and fault_type: {risk.get('fault')}. "
+            "Validate it, try it on the device until it runs as intended (a crash or lost state on the first try is "
+            "a finding, not a reason to change the spec), and save it. If this flow cannot be reached on the running "
+            "app, say why and save nothing.")
+
+
 def load_flows(app_dir: Path) -> list[dict]:
     from .paths import flows_path
     f = flows_path(app_dir)

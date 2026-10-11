@@ -40,10 +40,13 @@ Built-in attacks are generic templates, filled per app from the screen map:
 | `network_loss` | Drop wifi and data, then submit or start slow work | `crashed`, `no_feedback` (silent failure) |
 | `permission_revoke` | Grant a permission through the app, revoke it the way Settings does, use the feature again | `crashed` |
 | `low_memory` | Recreate the screen 3 times, send critical and background trim signals, come back | `leaked`: more live Activities after a forced GC than at the start, or the heap grew by half and 16 MB |
-| `performance` | Busy-loop 4 CPU cores, scroll, use the screen's slowest action | `froze`: any frame over 700 ms (Play vitals "frozen") |
+| `performance` | Busy-loop 4 CPU cores, scroll, use the screen's slowest action, press a key while it runs | `froze`: any frame over 700 ms (Play vitals "frozen"); `anr`: Android declares the app not responding (the main thread's stack is pulled from Android's own ANR record) |
 | `slow_startup` | 5 cold starts and 3 hot starts, timed by Android (`am start -W`) | `slow_start`: median cold start ≥ 5 s or hot start ≥ 1.5 s (Play vitals) |
 
+Each built-in attack runs on its **best 2 screens** by default (`--screens N` or `screens_per_attack:` in `monkey.yaml`).
+
 Plus **app-specific attacks**:
+- `droid-monkey attacks from-flows`: every risk the analysis found on a user flow (checkout, login, add task...) becomes an attack that walks that flow and injects that fault at the moment the analysis named. On MonkeyMart, the first two found a real crash by backgrounding or rotating the app during a 5 s load, for $0.01.
 - `droid-monkey attacks suggest`: the designer agent reads the analysis and the code and writes new attacks for this app.
 - `droid-monkey attacks new "rotate the phone while the order is being placed"`: describe one in plain words.
 
@@ -91,8 +94,8 @@ Everything droid-monkey writes goes to `.droid-monkey/` in your repo: analysis, 
 | `analyze [--static-only] [--agent]` | Static profile and the coding agent's read → `ANALYSIS.md`, `flows.json` |
 | `explore [--mode agent\|rules] [--agent]` | Screen map. `rules` is a free tap-everything explorer with no model |
 | `attack NAME\|builtin\|custom\|all [--diagnose] [--target --action]` | Run attacks, no fixing. Builds first if the installed app wasn't built from the current source |
-| `attacks list\|show\|suggest\|new` | Built-in and app-specific attack types; the designer agent |
-| `run [--attacks a,b] [--agent] [--auto-fix] [--resume ID]` | The full loop. `--auto-fix` skips the question (CI); `--resume` continues a killed or paused run |
+| `attacks list\|show\|suggest\|new\|from-flows` | Built-in and app-specific attack types; the designer agent; attacks from the analysed user flows |
+| `run [--attacks a,b] [--screens N] [--agent] [--auto-fix] [--resume ID]` | The full loop. `--auto-fix` skips the question (CI); `--resume` continues a killed or paused run. Every run ends with a **receipt**: what was found and fixed, time, and tokens and cost per step |
 | `report RUN` / `compare A B` / `pr RUN` | PR body, score card and dashboard / before-after table / push and open the PR |
 
 ### Coding agents

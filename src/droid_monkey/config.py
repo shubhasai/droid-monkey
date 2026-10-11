@@ -30,6 +30,7 @@ class AppConfig:
     java_home: str | None = None  # optional: JDK for this repo's Gradle (older Gradle cannot run on the newest JDK)
     llm: LLMConfig = field(default_factory=LLMConfig)
     agent: str = "auto"              # coding agent: auto | claude | codex | api (see agents.py)
+    screens_per_attack: int = 2      # each built-in attack runs on this many of its best screens
     agent_model: str | None = None   # optional model for that agent
 
 
@@ -49,5 +50,6 @@ def load(app_dir: Path) -> AppConfig:
         java_home=raw.get("java_home"),
         llm=LLMConfig.from_dict(raw.get("llm")),
         agent=str(raw.get("agent") or "auto"),
+        screens_per_attack=int(raw.get("screens_per_attack") or 2),
         agent_model=raw.get("agent_model"),
     )

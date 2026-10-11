@@ -75,3 +75,17 @@ def test_a_form_outranks_a_deep_screen_for_process_death():
     smap = sample_map()
     smap.screens["deep"] = ScreenInfo("deep", ["tap x"] * 13, "Drawer", [], ["drawer"], [])
     assert best(generate(smap), "process_death").screen == "s2"
+
+
+def test_each_builtin_attack_runs_on_its_best_screens():
+    from droid_monkey.scenarios import builtin_attacks
+    from droid_monkey.specs import Known
+    smap = sample_map()
+    known = Known(set(smap.screens), {a.selector for s in smap.screens.values() for a in s.actions},
+                  {"android.permission.CAMERA"})
+    items = builtin_attacks(smap, known, screens_per_attack=2)
+    pd = [i for i in items if i["base"] == "process_death"]
+    assert [i["name"] for i in pd] == ["process_death", "process_death_on_s1"]   # best screen keeps the plain name
+    assert len({i["screen"] for i in pd}) == 2
+    assert [i["name"] for i in items if i["base"] == "slow_startup"] == ["slow_startup"]  # one launch screen
+    assert all(i["spec"].name == i["name"] for i in items)
