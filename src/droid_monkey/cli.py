@@ -368,3 +368,41 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
         extra = f"  {o['commit'][:8]}" + (f" checkpoint {o['checkpoint']}" if o.get("checkpoint") else "") if o.get("commit") else ""
         click.echo(f"  {o['attack']:28} " + click.style(f"{o['status']:9}", fg=color) + f" was {o['before']}{extra}")
     click.echo(f"branch: {final.get('branch')}   evidence: {ctx.run_dir}")
+
+
+@main.command()
+@click.argument("run_id")
+@APP_DIR
+def report(run_id: str, app_dir: Path) -> None:
+    """Write the PR body, score card and dashboard for a finished run."""
+    from . import report as report_mod
+    cfg = config_mod.load(app_dir)
+    r = report_mod.build(cfg.app_dir, cfg.package, run_id)
+    click.echo(f"resilience {r.score}/100, {r.fixed} of {r.total} attacks fixed")
+    click.echo(f"  PR body:    {r.pr_body}\n  score card: {r.score_card}\n  dashboard:  {r.dashboard}")
+
+
+@main.command()
+@click.argument("run_id")
+@APP_DIR
+@click.option("--base", default="main", show_default=True, help="Branch to open the PR against.")
+@click.option("--draft", is_flag=True, help="Open the PR as a draft.")
+def pr(run_id: str, app_dir: Path, base: str, draft: bool) -> None:
+    """Push the run's branch (with Entire checkpoints) and open a GitHub PR with the evidence table."""
+    import subprocess
+    from . import report as report_mod
+    cfg = config_mod.load(app_dir)
+    summary = report_mod.load_summary(cfg.app_dir, run_id)
+    r = report_mod.build(cfg.app_dir, cfg.package, run_id)
+    branch = summary["branch"]
+    fixed = r.fixed
+    title = f"droid-monkey: fix {fixed} lifecycle bug{'s' if fixed != 1 else ''} (resilience {r.score}/100)"
+    click.echo(f"pushing {branch} ...")
+    subprocess.run(["git", "push", "-u", "origin", branch], cwd=cfg.app_dir, check=True)
+    cmd = ["gh", "pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", str(r.pr_body)]
+    if draft:
+        cmd.append("--draft")
+    out = subprocess.run(cmd, cwd=cfg.app_dir, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise click.ClickException(out.stderr.strip())
+    click.echo(click.style(out.stdout.strip(), fg="green"))
