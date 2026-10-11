@@ -373,6 +373,11 @@ def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: 
             graph = loop.graph().compile(checkpointer=saver)
             config = {"configurable": {"thread_id": run_id}, "recursion_limit": 200}
             if resume:
+                # A resumed run must continue on its own branch, never on whatever is checked out now.
+                branch = (graph.get_state(config).values or {}).get("branch")
+                if branch and git.current_branch(ctx.cfg.app_dir) != branch:
+                    git.checkout(ctx.cfg.app_dir, branch)
+                    echo(f"resume: switched the app repo to {branch}")
                 return graph.invoke(None, config, durability="sync")
             return graph.invoke({"run_id": run_id, "log": []}, config, durability="sync")
 

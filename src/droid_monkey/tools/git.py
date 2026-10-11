@@ -63,6 +63,13 @@ def start_run_branch(app_dir: Path, name: str, module: str) -> str:
     return head(app_dir)
 
 
+def checkout(app_dir: Path, branch: str) -> None:
+    """Switch branches, carrying uncommitted edits along (git refuses if they would conflict)."""
+    _git(app_dir, "checkout", branch)
+    if current_branch(app_dir) != branch:
+        raise GitError(f"could not switch to {branch}")
+
+
 def changed_files(app_dir: Path) -> list[str]:
     return _status(app_dir)
 
