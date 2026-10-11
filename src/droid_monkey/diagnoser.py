@@ -56,6 +56,10 @@ database or network on the launch path, heavy first layout. Fixes: defer or lazi
 thread, App Startup initializers with lazy dependencies, a lighter first screen.
 Use trace_sql for anything the summary does not answer.
 
+Every number in your root cause must match the evidence: never stretch a small slice to explain a large cost. If
+nothing you find in the code accounts for what was measured (for example seconds of main-thread work in a method that
+does almost nothing), say exactly that in root_cause and lower your confidence, instead of inventing a cause.
+
 Then answer with ONLY this JSON object, no prose around it:
 {{"summary": "imperative one-line fix summary under 60 characters, e.g. 'keep checkout form in SavedStateHandle'",
   "root_cause": "2-4 sentences: what the code does, why it fails under this fault",

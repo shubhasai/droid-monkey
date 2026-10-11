@@ -216,7 +216,8 @@ def explore(app_dir: Path, mode: str, model: str) -> None:
 @click.option("--target", help="Screen id from the screen map (built-in attacks; default: the best candidate).")
 @click.option("--action", help="Trigger step, e.g. 'tap submit_button' (built-in attacks; default: the best candidate's).")
 @click.option("--re-explore", is_flag=True, help="Explore again even if a screen map exists.")
-@click.option("--build/--no-build", default=False, help="Build and install the app first.")
+@click.option("--build/--no-build", default=None, help="Build and install the app first. Default: only when the "
+                                                       "installed app was not built from the current source.")
 @click.option("--run-id", default=None, help="Evidence folder name under .droid-monkey/runs/.")
 @click.option("--diagnose", is_flag=True, help="For each failure, find the root cause and print the suggested fix "
                                                "with its evidence (no code is changed).")
@@ -226,11 +227,21 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
     best = None
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
+    from . import provenance
+    mismatch = None if build else provenance.check(ctx.cfg.app_dir, ctx.adb, ctx.cfg.package)
+    if build is None and mismatch:
+        click.echo(f"building first: {mismatch}")
+        build, mismatch = True, None
+    elif mismatch:
+        click.echo(click.style(f"warning: {mismatch}; results describe the installed build, not this source", fg="yellow"))
+        if diagnose:
+            click.echo(click.style("--diagnose skipped: it reads this source, which is not what is installed", fg="yellow"))
+            diagnose = False
     if build:
         res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
         if not res.ok or not res.apk:
             raise click.ClickException(f"build failed:\n{res.log_tail}")
-        gradle.install(ctx.adb, res.apk, package=ctx.cfg.package)
+        gradle.install(ctx.adb, res.apk, package=ctx.cfg.package, source_dir=ctx.cfg.app_dir)
         click.echo(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
     smap, prof, saved, known = _load_app(ctx, re_explore)
     candidates = scenarios_mod.generate(smap)

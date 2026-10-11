@@ -106,7 +106,7 @@ class Loop:
             self.ctx.adb, self.ctx.device = adb, Device(adb, self.cfg.package)
             build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
             if build.ok and build.apk:
-                gradle.install(adb, build.apk, package=self.cfg.package)
+                gradle.install(adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
             log = log + [f"{time.strftime('%H:%M:%S')} watchdog: emulator back, app reinstalled; retrying {what}"]
             self.echo(log[-1])
             return fn(), log[len(state.get('log', [])):]
@@ -126,7 +126,7 @@ class Loop:
         build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if not build.ok or not build.apk:
             raise RuntimeError(f"the app does not build before any fix:\n{build.log_tail}")
-        gradle.install(self.ctx.adb, build.apk, package=self.cfg.package)
+        gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
         log = self.note(state, f"setup: branch {branch} from {base[:8]}, built and installed in {build.seconds:.0f}s")
         return {"branch": branch, "last_good": base, "index": 0, "outcomes": [], "log": log}
 
@@ -326,7 +326,7 @@ class Loop:
         git.reset_hard(self.cfg.app_dir, state["last_good"])
         build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if build.ok and build.apk:
-            gradle.install(self.ctx.adb, build.apk, package=self.cfg.package)
+            gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
         res = state["result"]
         outcome = {"attack": state["current"]["name"], "status": "unfixed", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "attempts": state.get("attempts", 0),

@@ -29,7 +29,7 @@ def verify(ctx: Context, spec: Spec, test_files: list[str]) -> VerifyResult:
     build = gradle.build(cfg.app_dir, cfg.module, cfg.variant, java_home=cfg.java_home)
     if not build.ok or not build.apk:
         return VerifyResult(False, "the fix does not build", False, build.seconds, build.log_tail)
-    gradle.install(ctx.adb, build.apk, package=cfg.package)
+    gradle.install(ctx.adb, build.apk, package=cfg.package, source_dir=cfg.app_dir)
 
     replay = SpecRunner(ctx, spec).run()
     replay_ok = replay.outcome == "survived"
@@ -38,7 +38,7 @@ def verify(ctx: Context, spec: Spec, test_files: list[str]) -> VerifyResult:
     if test_files:
         test = gradle.run_test(cfg.app_dir, cfg.module, cfg.variant, cfg.app_dir / test_files[0], java_home=cfg.java_home)
         if test.kind == "instrumented":
-            gradle.install(ctx.adb, build.apk, package=cfg.package)  # connected tests uninstall the app when they finish
+            gradle.install(ctx.adb, build.apk, package=cfg.package, source_dir=cfg.app_dir)  # connected tests uninstall the app when they finish
     test_ok = bool(test and test.ok)
 
     if replay_ok and test_ok:

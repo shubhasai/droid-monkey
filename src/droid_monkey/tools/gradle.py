@@ -59,9 +59,9 @@ def build(app_dir: Path, module: str = "app", variant: str = "debug", timeout: f
     return BuildResult(proc.returncode == 0, time.time() - start, apks[-1] if apks else None, tail)
 
 
-def install(adb: Adb, apk: Path, package: str | None = None) -> None:
+def install(adb: Adb, apk: Path, package: str | None = None, source_dir: Path | None = None) -> None:
     """Install (replace) the APK. On a full device, `install -r` needs room for both copies, so uninstall the old
-    one first and retry: attacks clear app data anyway."""
+    one first and retry: attacks clear app data anyway. With `source_dir`, record which source it was built from."""
     try:
         out = adb.run("install", "-r", "-t", str(apk), timeout=180)
     except AdbError as e:
@@ -71,6 +71,9 @@ def install(adb: Adb, apk: Path, package: str | None = None) -> None:
         out = adb.run("install", "-t", str(apk), timeout=180)
     if "Success" not in out:
         raise AdbError(f"install failed: {out.strip()[-300:]}")
+    if source_dir is not None and package:
+        from .. import provenance
+        provenance.record(source_dir, adb, package)
 
 
 @dataclass
