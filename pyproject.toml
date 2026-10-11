@@ -7,7 +7,16 @@ authors = [
     { name = "shubhasai", email = "mshubhasai2002@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "click>=8.5.0",
+    "langchain>=1.4.4",
+    "langchain-anthropic>=1.7.5",
+    "langgraph>=1.2.14",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "neatlogs[anthropic,langchain,langgraph]>=1.4.26",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+]
 
 [project.scripts]
 droid-monkey = "droid_monkey:main"
