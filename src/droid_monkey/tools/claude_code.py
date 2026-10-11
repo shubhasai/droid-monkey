@@ -43,7 +43,22 @@ def run(
     timeout: float = 900,
     mcp_config: Path | None = None,
     disallowed_tools: list[str] | None = None,
+    name: str = "session",
 ) -> ClaudeResult:
+    """One `claude -p` session, traced in neatlogs as an LLM span with Claude Code's own token and cost report."""
+    from .. import tracing
+    tracing.init()
+    span = tracing.ClaudeCodeSpan(name, model, prompt)
+    try:
+        result = _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallowed_tools)
+    except ClaudeCodeError as e:
+        span.end(error=str(e))
+        raise
+    span.end(result)
+    return result
+
+
+def _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallowed_tools) -> ClaudeResult:
     cmd = [claude_path(), "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
            "--allowedTools", ",".join(allowed_tools)]
     if mcp_config:

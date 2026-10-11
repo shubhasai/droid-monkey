@@ -103,7 +103,7 @@ def fix(app_dir: Path, module: str, failure: str, diagnosis: Diagnosis, model: s
                                     "and fix every error it reports.\n", "").replace(
                                     ", and call the compile tool before you finish", "")
         res = claude_code.run(prompt, cwd=app_dir, allowed_tools=allowed, model=model, resume=resume_session,
-                              timeout=1200, disallowed_tools=DENIED, mcp_config=mcp_config)
+                              timeout=1200, disallowed_tools=DENIED, mcp_config=mcp_config, name="fix")
     after = git.file_states(app_dir)
     touched = [p for p, h in after.items() if before.get(p) != h]
 

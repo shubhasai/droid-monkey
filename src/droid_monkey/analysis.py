@@ -103,7 +103,8 @@ def run(app_dir: Path, profile: AppProfile, model: str | None = "claude-sonnet-5
         work = Path(tmp)
         source_snapshot(app_dir, work)
         prompt = PROMPT.format(profile=_profile_brief(profile), faults=", ".join(FAULT_TYPES))
-        result = claude_code.run(prompt, cwd=work, allowed_tools=["Read", "Grep", "Glob", "Write"], model=model)
+        result = claude_code.run(prompt, cwd=work, allowed_tools=["Read", "Grep", "Glob", "Write"], model=model,
+                                 name="analyze")
         md, fj = work / "ANALYSIS.md", work / "flows.json"
         if not result.ok or not md.exists() or not fj.exists():
             raise claude_code.ClaudeCodeError(f"analysis did not produce both files: {result.text[:300]}")

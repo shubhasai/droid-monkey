@@ -412,7 +412,9 @@ def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: 
 
     @tracing.span(kind="WORKFLOW", name="droid-monkey run", session_id=run_id)
     def go() -> dict:
-        with SqliteSaver.from_conn_string(str(state_db)) as saver:
+        with tracing.identify(ctx.cfg.package, session_id=run_id, app=ctx.cfg.package,
+                              mode="naive" if naive else "droid-monkey"), \
+                SqliteSaver.from_conn_string(str(state_db)) as saver:
             graph = loop.graph().compile(checkpointer=saver)
             config = {"configurable": {"thread_id": run_id}, "recursion_limit": 200}
             if resume:

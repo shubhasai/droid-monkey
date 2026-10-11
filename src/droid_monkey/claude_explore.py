@@ -98,6 +98,7 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
             model=model,
             timeout=timeout,
             mcp_config=mcp_config,
+            name="explore",
         )
     if not out.exists():
         raise claude_code.ClaudeCodeError(f"exploration produced no graph: {result.text[:400]}")

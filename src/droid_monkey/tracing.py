@@ -31,8 +31,89 @@ def init(workflow: str = "droid-monkey", tags: list[str] | None = None) -> bool:
     # Export retries are logged by OpenTelemetry on stderr; keep the console readable if the backend is down.
     logging.getLogger("opentelemetry").setLevel(logging.CRITICAL)
     neatlogs.init(workflow_name=workflow, instrumentations=["langgraph", "langchain", "anthropic"], tags=tags or [])
+    _price_api_calls()
     _state["enabled"] = True
     return True
+
+
+def _price_api_calls() -> None:
+    """neatlogs records each Anthropic call's model and tokens but no price, so the dashboard's spend stays $0.
+    Add the cost to the same span, from Anthropic's published prices (pricing.py)."""
+    try:
+        from neatlogs import anthropic as nl_anthropic
+    except ImportError:
+        return
+    original = getattr(nl_anthropic, "_set_usage_attributes", None)
+    if original is None or getattr(original, "_droid_monkey", False):
+        return
+
+    def with_cost(span, usage):
+        original(span, usage)
+        try:
+            from .pricing import cost_usd
+            model = (getattr(span, "attributes", None) or {}).get("neatlogs.llm.model_name", "")
+            cost = cost_usd(model, getattr(usage, "input_tokens", 0) or 0, getattr(usage, "output_tokens", 0) or 0,
+                            getattr(usage, "cache_read_input_tokens", 0) or 0,
+                            getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            if cost is not None:
+                span.set_attribute("neatlogs.llm.cost_usd", cost)
+        except Exception:  # pricing is best effort; never break the call
+            pass
+
+    with_cost._droid_monkey = True
+    nl_anthropic._set_usage_attributes = with_cost
+
+
+class ClaudeCodeSpan:
+    """An LLM span for one `claude -p` session (a separate process neatlogs cannot see into), carrying the exact
+    model, tokens and cost that Claude Code reports, so analysis, exploration and fixes show up in spend."""
+
+    def __init__(self, name: str, model: str | None, prompt: str):
+        self.span = None
+        if not _state["enabled"]:
+            return
+        try:
+            from neatlogs._wrap_utils import get_provider_tracer
+            self.span = get_provider_tracer().start_span(name=f"claude-code.{name}", attributes={
+                "neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
+                "neatlogs.llm.system": "claude-code", "neatlogs.llm.model_name": model or "claude-code",
+                "neatlogs.llm.input_messages.0.role": "user",
+                "neatlogs.llm.input_messages.0.content": prompt[:4000]})
+        except Exception:
+            self.span = None
+
+    def end(self, result=None, error: str | None = None) -> None:
+        if self.span is None:
+            return
+        from opentelemetry.trace import StatusCode
+        s = self.span
+        if result is not None:
+            u = result.usage or {}
+            prompt = int(u.get("input_tokens") or 0)
+            out = int(u.get("output_tokens") or 0)
+            s.set_attribute("neatlogs.llm.token_count.prompt", prompt)
+            s.set_attribute("neatlogs.llm.token_count.completion", out)
+            s.set_attribute("neatlogs.llm.token_count.total", prompt + out)
+            s.set_attribute("neatlogs.llm.token_count.cache_read", int(u.get("cache_read_input_tokens") or 0))
+            s.set_attribute("neatlogs.llm.token_count.cache_write", int(u.get("cache_creation_input_tokens") or 0))
+            s.set_attribute("neatlogs.llm.cost_usd", float(result.cost_usd or 0.0))
+            s.set_attribute("neatlogs.llm.metrics.duration_ms", float(result.seconds) * 1000)
+            s.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+            s.set_attribute("neatlogs.llm.output_messages.0.content", (result.text or "")[:4000])
+            s.set_attribute("claude_code.turns", int(result.turns or 0))
+            s.set_status(StatusCode.OK if result.ok else StatusCode.ERROR)
+        else:
+            s.set_status(StatusCode.ERROR, (error or "")[:300])
+        s.end()
+
+
+def identify(end_user_id: str, session_id: str | None = None, **metadata):
+    """Tag everything inside with the app being attacked (neatlogs 'end user') and the run (session)."""
+    import contextlib
+    if not _state["enabled"]:
+        return contextlib.nullcontext()
+    import neatlogs
+    return neatlogs.identify(session_id=session_id, end_user_id=end_user_id, end_user_metadata=metadata or None)
 
 
 def span(kind: str, name: str, **kw):
