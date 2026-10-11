@@ -1,0 +1,13 @@
+# Built-in attack template. "{...}" values are filled per app from the explorer's best candidate.
+# A step whose placeholder has no value for this app is dropped.
+name: slow_startup
+fault_type: startup
+description: Start the app from scratch 5 times and bring it back from the background 3 times while a trace records; cold and hot start times must stay under Google Play's limits.
+screen: "{screen}"
+trace: true
+steps:
+  - fault: cold_start
+    runs: 5
+  - fault: hot_start
+    runs: 3
+expect: [no_crash, fast_start]

@@ -35,3 +35,20 @@ def test_memory_forces_a_gc_then_reads_activities_and_heap(monkeypatch):
     adb = FakeAdb({"meminfo": MEMINFO, "dumpheap": ""})
     assert Device(adb, "com.example").memory() == {"activities": 3, "java_heap_kb": 14876, "gc": 1}
     assert adb.calls[0].startswith("am dumpheap -g com.example")
+
+
+def test_launch_time_and_state_come_from_am_start(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    out = "Status: ok\nLaunchState: COLD\nActivity: com.example/.Main\nTotalTime: 5946\nWaitTime: 5950\nComplete\n"
+    adb = FakeAdb({"am start": out, "resolve-activity": "com.example/.Main"})
+    assert Device(adb, "com.example").start_time("cold") == (5946, "COLD")
+    assert "am force-stop com.example" in adb.calls
+
+
+def test_a_hot_launch_is_not_accepted_as_cold(monkeypatch):
+    import pytest
+    from droid_monkey.tools.adb import AdbError
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    adb = FakeAdb({"am start": "LaunchState: HOT\nTotalTime: 50\n", "resolve-activity": "com.example/.Main"})
+    with pytest.raises(AdbError):
+        Device(adb, "com.example").start_time("cold")

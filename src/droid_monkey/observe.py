@@ -8,6 +8,7 @@ SURVIVED, CRASHED, LOST_STATE, SKIPPED = "survived", "crashed", "lost_state", "s
 NO_FEEDBACK = "no_feedback"  # survived, but the user was shown nothing (silent failure)
 LEAKED = "leaked"  # survived, but destroyed Activities (or the heap) stayed alive after a forced GC
 FROZE = "froze"    # survived, but the UI froze: frames over 700 ms, usually work on the main thread
+SLOW_START = "slow_start"  # survived, but starting the app takes longer than Play vitals call excessive
 
 
 @dataclass

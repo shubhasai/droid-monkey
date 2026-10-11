@@ -2,7 +2,7 @@
 
 The rules are generic: forms and deep screens for process death, in-flight work and forms for rotation, form submits
 and slow actions for network loss, permission-asking actions for permission revoke, busy and deep screens for
-low memory (leaks), and the slowest action under CPU load for performance. The planner reorders them.
+low memory (leaks), the slowest action under CPU load for performance, and the launch screen for startup. The planner reorders them.
 """
 
 from dataclasses import dataclass
@@ -85,6 +85,12 @@ def generate(smap: ScreenMap) -> list[Candidate]:
                              1 + min(work, 5) * 2 + (2 if slow and slow.showed_progress else 0) + min(len(s.actions), 10) / 5,
                              f"'{s.title}': scroll and " + (f"'{slow.label}' ({work:.1f}s of work)" if slow else "idle")
                              + " under CPU load must not freeze the UI"))
+
+    # Startup: one candidate, the screen the app opens on (the shortest recorded path).
+    if smap.screens:
+        first = min(smap.screens.values(), key=lambda s: len(s.path))
+        out.append(Candidate("slow_startup", first.id, None, 0, 10,
+                             f"the app opens on '{first.title}'; cold and hot starts must reach its first frame quickly"))
 
     return sorted(out, key=lambda c: (c.attack, -c.score))
 

@@ -25,7 +25,7 @@ import yaml
 
 
 FAULT_TYPES = ["process_death", "rotation", "network_loss", "permission_revoke", "configuration_change",
-               "low_memory", "performance", "background"]
+               "low_memory", "performance", "startup", "background"]
 
 TRIM_LEVELS = ["RUNNING_MODERATE", "RUNNING_LOW", "RUNNING_CRITICAL", "HIDDEN", "BACKGROUND", "MODERATE", "COMPLETE"]
 
@@ -48,6 +48,9 @@ FAULTS: dict[str, tuple[dict[str, str], str]] = {
     "trim_memory": ({"level": "choice:" + "|".join(TRIM_LEVELS)}, "send onTrimMemory; background levels send the app Home first"),
     "recreate_activity": ({"times": "int:1:5"}, "rotate there and back N times; each flip destroys and recreates the "
                           "Activity, so references to old ones pile up as leaks"),
+    "cold_start": ({"runs": "int:1:10"}, "stop the process, launch like a launcher tap and time it to the first "
+                   "frame (Android's own measure); repeated, each run recorded"),
+    "hot_start": ({"runs": "int:1:10"}, "send the app Home, bring it back and time it; repeated, each run recorded"),
     "cpu_stress": ({"threads": "int:1:8"}, "busy-loop N CPU cores in the background like a loaded mid-range phone, "
                    "until the attack ends"),
 }
@@ -72,6 +75,8 @@ EXPECTATIONS = {
     "shows_feedback": "after the trigger the app shows something new (error, retry, message) instead of nothing",
     "no_leak": "after a forced garbage collection no more Activity instances are alive than at the start, and the "
                "Java heap did not grow by more than half (and 16 MB)",
+    "fast_start": "median cold start under 5 s and hot start under 1.5 s (Google Play vitals' thresholds for "
+                  "excessive start times)",
     "smooth": "no frozen frames (one frame taking over 700 ms, the Play vitals threshold) from the first step on",
 }
 

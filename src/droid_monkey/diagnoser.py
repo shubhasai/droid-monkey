@@ -36,7 +36,7 @@ class DiagnosisError(RuntimeError):
 
 
 SYSTEM = """You are the diagnoser inside droid-monkey, which attacks Android apps with real-world faults (process
-death, rotation, network loss, revoked permissions, configuration changes, low memory, a loaded CPU) and then fixes
+death, rotation, network loss, revoked permissions, configuration changes, low memory, a loaded CPU, slow startup) and then fixes
 what breaks.
 
 An attack just failed on the app. Find the root cause in the code: the design mistake that makes the app fail under
@@ -49,6 +49,11 @@ synchronous network or database call, a binder call), 'running' means heavy comp
 disk access; then find that work in the code behind the slice (input/click handlers, composition, onCreate). For a
 leak, look for what outlives the Activity: static or object fields, singletons, listeners or callbacks registered
 without being unregistered, coroutines or threads capturing a Context, ViewModels holding Views or Activities.
+For 'slow_start', the Perfetto launch breakdown shows where the slowest launch spent its main-thread time
+(bindApplication = Application.onCreate and content providers/initializers, activityStart = Activity.onCreate and
+the first composition or inflation); find that work in the code: eager SDK or DI initialisation, synchronous disk,
+database or network on the launch path, heavy first layout. Fixes: defer or lazily initialise, move to a background
+thread, App Startup initializers with lazy dependencies, a lighter first screen.
 Use trace_sql for anything the summary does not answer.
 
 Then answer with ONLY this JSON object, no prose around it:
@@ -84,6 +89,8 @@ def _failure_text(result: dict, spec: dict, screen: dict | None) -> str:
         lines.append(f"frame stats: {metrics['frames']}")
     if metrics.get("memory_before"):
         lines.append(f"memory after forced GC: before {metrics['memory_before']}, after {metrics.get('memory_after')}")
+    if metrics.get("startup"):
+        lines.append(f"launch times (ms, Android's am start -W): {metrics['startup']}")
     if metrics.get("trace"):
         from .tools.perfetto import TraceAnalysis
         lines.append("Perfetto analysis of the attack:\n" + TraceAnalysis(**metrics["trace"]).summary())

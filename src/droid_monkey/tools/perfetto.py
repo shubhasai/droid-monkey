@@ -7,7 +7,7 @@ can run its own read-only queries on the same trace.
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .adb import Adb, AdbError
@@ -79,6 +79,8 @@ class TraceAnalysis:
     binder_on_main: list[dict]                 # {ms, reply_process}
     memory_mb: dict                            # counter -> {min, max, end}
     device_mem_available_mb: dict
+    startups: list[dict] = field(default_factory=list)        # {type, ms} for each launch of the app
+    slowest_startup: dict = field(default_factory=dict)       # {type, ms, main_thread: {state: ms}, slices: [...]}
 
     def to_dict(self) -> dict:
         return self.__dict__
@@ -103,6 +105,13 @@ class TraceAnalysis:
             lines.append(f"GC: {self.gc['count']} collections, {self.gc['ms']:.0f} ms")
         for name, v in self.memory_mb.items():
             lines.append(f"{name}: {v['min']:.1f} -> {v['max']:.1f} MB (end {v['end']:.1f} MB)")
+        if self.startups:
+            lines.append("launches: " + ", ".join(f"{x['type']} {x['ms']:.0f} ms" for x in self.startups))
+        if self.slowest_startup:
+            st = self.slowest_startup
+            states = ", ".join(f"{STATE_NAMES.get(k, k)} {v:.0f} ms" for k, v in st["main_thread"].items())
+            lines.append(f"slowest launch ({st['type']}, {st['ms']:.0f} ms), main thread: {states}")
+            lines += [f"  {x['ms']:.0f} ms '{x['name']}'" for x in st["slices"]]
         if self.device_mem_available_mb:
             d = self.device_mem_available_mb
             lines.append(f"device MemAvailable: min {d['min']:.0f} MB, max {d['max']:.0f} MB")
@@ -187,13 +196,43 @@ def _analyse(tp, package: str) -> TraceAnalysis:
         join counter_track ct on c.track_id = ct.id where ct.name = 'MemAvailable'""")
     device = {"min": round(avail[0].mn, 1), "max": round(avail[0].mx, 1)} if avail and avail[0].mn is not None else {}
 
+    startups, slowest = _startups(tp, package)
     return TraceAnalysis(
+        startups=startups, slowest_startup=slowest,
         seconds=round(seconds, 1), main_thread_states={k: round(v, 1) for k, v in states.items()},
         long_main_slices=long_slices, main_blocks_over_700ms=sum(1 for x in long_slices if x["ms"] > 700),
         frames_over_16ms=int(frames[0].slow or 0) if frames else 0, busiest_threads=busiest,
         app_cpu_ms=round(cpu[0].ms or 0.0, 1) if cpu else 0.0,
         gc={"count": int(gc[0].n or 0), "ms": round(gc[0].ms or 0.0, 1)} if gc else {"count": 0, "ms": 0.0},
         binder_on_main=binder, memory_mb=memory, device_mem_available_mb=device)
+
+
+def _startups(tp, package: str) -> tuple[list[dict], dict]:
+    """Every launch of the app (Perfetto's startup module), and what the main thread did in the slowest one:
+    its states and the longest named work (bindApplication, activityStart, inflate, the app's own trace sections)."""
+    try:
+        rows = _rows(tp, f"""INCLUDE PERFETTO MODULE android.startup.startups;
+            select s.startup_id, s.startup_type, s.ts, s.dur, s.dur / 1e6 as ms, p.upid, p.pid
+            from android_startups s left join android_startup_processes p using (startup_id)
+            where s.package = '{package}' order by s.ts""")
+    except Exception:  # older trace_processor without the module
+        return [], {}
+    startups = [{"type": r.startup_type, "ms": round(r.ms, 1)} for r in rows]
+    if not rows:
+        return startups, {}
+    worst = max(rows, key=lambda r: r.dur)
+    utid = _rows(tp, f"select utid from thread where upid = {worst.upid} and tid = {worst.pid}") if worst.upid else []
+    if not utid:
+        return startups, {"type": worst.startup_type, "ms": round(worst.ms, 1), "main_thread": {}, "slices": []}
+    u, a, b = utid[0].utid, worst.ts, worst.ts + worst.dur
+    states = {x.state: round(x.ms, 1) for x in _rows(tp, f"""
+        select state, sum(min(ts + dur, {b}) - max(ts, {a})) / 1e6 as ms from thread_state
+        where utid = {u} and ts < {b} and ts + dur > {a} group by state order by ms desc""")}
+    slices = [{"name": x.name[:90], "ms": round(x.ms, 1), "depth": x.depth} for x in _rows(tp, f"""
+        select s.name, s.dur / 1e6 as ms, s.depth from slice s join thread_track tt on s.track_id = tt.id
+        where tt.utid = {u} and s.ts >= {a} and s.ts < {b} and s.depth <= 4 and s.dur > 5e6
+        order by s.dur desc limit 10""")]
+    return startups, {"type": worst.startup_type, "ms": round(worst.ms, 1), "main_thread": states, "slices": slices}
 
 
 def query(trace: Path, sql: str, limit: int = 50) -> str:

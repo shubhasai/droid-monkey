@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 
 from .config import Target
 from .driver import AppDriver, Context, NavigationError
-from .observe import FROZE, LEAKED, NO_FEEDBACK, SURVIVED, Verdict, classify
+from .observe import FROZE, LEAKED, NO_FEEDBACK, SLOW_START, SURVIVED, Verdict, classify
 from .specs import Spec
 from .tools import ui
 from .tools.adb import AdbError
@@ -119,6 +119,8 @@ class SpecRunner:
                 verdict = Verdict(NO_FEEDBACK, "after the trigger the app showed nothing new: no error, retry or message")
         if verdict.outcome == SURVIVED and "smooth" in spec.expect:
             verdict = self._judge_frames() or Verdict(SURVIVED, verdict.reason + ", no frozen frames")
+        if verdict.outcome == SURVIVED and "fast_start" in spec.expect:
+            verdict = self._judge_startup() or Verdict(SURVIVED, verdict.reason + ", starts within Play vitals limits")
         if verdict.outcome == SURVIVED and "no_leak" in spec.expect:
             verdict = self._judge_memory() or Verdict(SURVIVED, verdict.reason + ", no leaked Activities")
         if trace_file:
@@ -160,6 +162,25 @@ class SpecRunner:
         if f["frozen"]:
             return Verdict(FROZE, f"{f['frozen']} frozen frame(s) over 700 ms and {f['slow_ui_thread']:.0f} slow UI-thread "
                                   f"frames (p99 {f['p99_ms']:.0f} ms): something blocks the main thread")
+        return None
+
+    # Google Play vitals: a cold start of 5 s or more, or a hot start of 1.5 s or more, is excessive.
+    START_LIMITS_MS = {"cold": 5000, "hot": 1500}
+
+    def _judge_startup(self) -> Verdict | None:
+        from statistics import median
+        runs = self.metrics.get("startup", {})
+        slow = []
+        for kind, limit in self.START_LIMITS_MS.items():
+            times = [r["ms"] for r in runs.get(kind, [])]
+            if not times:
+                continue
+            med = median(times)
+            self.driver.notes.append(f"{kind} start: median {med:.0f} ms over {len(times)} runs {times} (limit {limit} ms)")
+            if med >= limit:
+                slow.append(f"{kind} start median {med:.0f} ms (limit {limit} ms, runs {times})")
+        if slow:
+            return Verdict(SLOW_START, "; ".join(slow) + ": work on the launch path delays the first frame")
         return None
 
     def _judge_memory(self) -> Verdict | None:
@@ -233,6 +254,11 @@ class SpecRunner:
             dev.trim_memory(step["level"])
         elif name == "recreate_activity":
             dev.recreate_activity(int(step["times"]))
+        elif name in ("cold_start", "hot_start"):
+            kind = name.split("_")[0]
+            for _ in range(int(step["runs"])):
+                ms, state = dev.start_time(kind)
+                self.metrics.setdefault("startup", {}).setdefault(kind, []).append({"ms": ms, "state": state})
         elif name == "cpu_stress":
             dev.cpu_stress(int(step["threads"]))
         else:  # the validator makes this unreachable

@@ -31,9 +31,9 @@ class Device:
             self._activity = component
         return self._activity
 
-    def launch(self) -> None:
+    def launch(self) -> str:
         """Start exactly like a launcher tap, so an existing task (and its saved state) is brought back."""
-        self.adb.shell(
+        return self.adb.shell(
             "am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "
             f"-f 0x10200000 -n {self.launcher_activity()}"
         )
@@ -224,6 +224,24 @@ class Device:
         return {"total": num(r"Total frames rendered: (\d+)"), "janky_pct": num(r"Janky frames: \d+ \(([\d.]+)%\)"),
                 "frozen": frozen, "slow_ui_thread": num(r"Number Slow UI thread: (\d+)"),
                 "p99_ms": num(r"99th percentile: (\d+)ms")}
+
+    def start_time(self, kind: str) -> tuple[int, str]:
+        """One timed launch, as Android measures it (`am start -W`: until the first frame is drawn).
+        cold: the process is stopped first; hot: the app is sent Home and brought back. Returns (ms, launch state)."""
+        if kind == "cold":
+            self.force_stop()
+            time.sleep(1)
+        else:
+            self.home()
+            time.sleep(1.5)
+        out = self.launch()
+        ms, state = re.search(r"TotalTime: (\d+)", out), re.search(r"LaunchState: (\w+)", out)
+        if not ms:
+            raise AdbError(f"no launch time reported: {out.strip()[:200]}")
+        launch_state = state.group(1) if state else "UNKNOWN"
+        if kind == "cold" and launch_state not in ("COLD", "UNKNOWN"):
+            raise AdbError(f"expected a cold start, Android reported {launch_state}")
+        return int(ms.group(1)), launch_state
 
     def background(self, seconds: float) -> None:
         """Leave the app (Home) and come back after `seconds`, without killing it."""

@@ -28,9 +28,11 @@ def proposal(item: dict, result: dict, diagnosis: dict) -> dict:
         b, a = metrics["memory_before"], metrics["memory_after"]
         evidence.append(f"after forced GC: Activities {b['activities']} -> {a['activities']}, "
                         f"Java heap {b['java_heap_kb'] // 1024} -> {a['java_heap_kb'] // 1024} MB")
+    for kind, runs in (metrics.get("startup") or {}).items():
+        evidence.append(f"{kind} start: " + ", ".join(f"{r['ms']} ms" for r in runs))
     if metrics.get("trace"):
         from .tools.perfetto import TraceAnalysis
-        evidence += ["perfetto: " + line for line in TraceAnalysis(**metrics["trace"]).summary().splitlines()[:6]]
+        evidence += ["perfetto: " + line for line in TraceAnalysis(**metrics["trace"]).summary().splitlines()[:12]]
     shots = Path(result.get("evidence_dir") or ".")
     files = [str(shots / n) for n in ("before.png", "after.png", "logcat.txt", "trace.perfetto-trace")
              if (shots / n).exists()]
