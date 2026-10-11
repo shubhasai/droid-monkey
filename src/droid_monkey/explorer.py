@@ -91,7 +91,7 @@ def _selector(node: ui.Node) -> str:
 
 
 def _group(node: ui.Node) -> str:
-    """Repeated list items count once: product_1..product_8 -> product_#; id-less rows share their geometry."""
+    """Repeated list items count once: item_1..item_8 -> item_#; id-less rows share their geometry."""
     if node.rid:
         return re.sub(r"\d+", "#", node.rid)
     x1, y1, x2, y2 = node.bounds
