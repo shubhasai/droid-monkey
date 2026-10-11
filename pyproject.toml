@@ -16,6 +16,7 @@ dependencies = [
     "mcp>=2.3.0",
     "neatlogs[anthropic,langchain,langgraph]>=1.4.26",
     "perfetto>=0.58.2",
+    "pillow>=12.3.0",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
 ]

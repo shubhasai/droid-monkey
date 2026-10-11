@@ -759,6 +759,7 @@ dependencies = [
     { name = "mcp" },
     { name = "neatlogs", extra = ["anthropic", "langchain", "langgraph"] },
     { name = "perfetto" },
+    { name = "pillow" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
@@ -778,6 +779,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "neatlogs", extras = ["anthropic", "langchain", "langgraph"], specifier = ">=1.4.26" },
     { name = "perfetto", specifier = ">=0.58.2" },
+    { name = "pillow", specifier = ">=12.3.0" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
