@@ -1,0 +1,26 @@
+https://neatlogs.com/hackathon?referrer=luma&utm_source=luma
+
+---
+
+<pasted_content id="c2f4">
+Two neatlogs links are still open in evidence/neatlogs.md:
+
+* a before/after trace comparison;
+* the trace link for the recovery run `run-20261012-175601`.
+
+Those come from your neatlogs dashboard (the trace page URL for that session).
+</pasted_content id="c2f4">
+
+how to do this
+
+---
+
+so what to do
+
+---
+
+@"/Users/shubhasai/Downloads/neatlogs2_files/" @"/Users/shubhasai/Downloads/neatlogs1_files/" @"/Users/shubhasai/Downloads/neatlogs_files/" @"/Users/shubhasai/Downloads/neatlogs2.html" @"/Users/shubhasai/Downloads/neatlogs1.html" @"/Users/shubhasai/Downloads/neatlogs.html"
+
+---
+
+remove this
