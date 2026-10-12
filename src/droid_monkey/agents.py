@@ -100,7 +100,8 @@ def model_for(backend: str, requested: str | None, agent_model: str | None) -> s
 
 def run(backend: str, prompt: str, cwd: Path, *, allowed_tools: list[str], disallowed_tools: list[str] | None = None,
         servers: list[McpServer] | None = None, model: str | None = None, resume: str | None = None,
-        timeout: float = 900, name: str = "session", llm=None) -> ClaudeResult:
+        timeout: float = 900, name: str = "session", llm=None, max_budget_usd: float | None = None) -> ClaudeResult:
+    """`max_budget_usd` is enforced by Claude Code only; the other agents are bounded by `timeout`."""
     servers = servers or []
     if backend == "claude":
         from .tools import claude_code
@@ -111,7 +112,8 @@ def run(backend: str, prompt: str, cwd: Path, *, allowed_tools: list[str], disal
                 mcp_config.write_text(json.dumps({"mcpServers": {
                     s.name: {"type": "stdio", "command": sys.executable, "args": s.argv} for s in servers}}))
             return claude_code.run(prompt, cwd=cwd, allowed_tools=allowed_tools, model=model, resume=resume,
-                                   timeout=timeout, mcp_config=mcp_config, disallowed_tools=disallowed_tools, name=name)
+                                   timeout=timeout, mcp_config=mcp_config, disallowed_tools=disallowed_tools, name=name,
+                                   max_budget_usd=max_budget_usd)
     if backend == "codex":
         return _traced("codex", name, model, prompt,
                        lambda: _codex(prompt, cwd, allowed_tools, servers, model, resume, timeout))

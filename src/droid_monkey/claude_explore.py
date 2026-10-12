@@ -75,7 +75,11 @@ def preflight() -> None:
 
 
 def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model: str | None = "claude-sonnet-5-5",
-        timeout: float = 3600, agent: str = "claude", llm=None) -> ClaudeExploreResult:
+        minutes: float = 10, max_screens: int = 60, max_usd: float | None = None, agent: str = "claude",
+        llm=None) -> ClaudeExploreResult:
+    """Explore until the agent finishes or a limit is hit. At the limit the map recorded so far is kept: the device
+    server saves it after every screen, so a stopped run still yields a usable (partial) map."""
+    import time
     from . import agents
     preflight()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -83,33 +87,53 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
     if flows:
         flows_text = "\nFlows found by the earlier code analysis:\n" + "\n".join(
             f"- {f.get('name')}: {f.get('description', '')}" for f in flows)
+    limits = (f"\nLimits for this run: {minutes:g} minutes and at most {max_screens} screens. Reach the most important "
+              f"screens first (the main flows above), and call finish when a tool result says LIMIT.\n")
+    started = time.time()
+    # The agent gets a little longer than the explore budget, so it can call finish after the device server's warning.
+    hard_timeout = minutes * 60 + 120
     with tempfile.TemporaryDirectory(prefix="droid-monkey-explore-") as tmp:
         work = Path(tmp) / "src"
         work.mkdir()
         source_snapshot(app_dir, work)
         device = agents.McpServer("device", "droid_monkey.device_mcp",
-                                  ["--app-dir", str(app_dir), "--source", str(work), "--out", str(out)])
-        result = agents.run(
-            agent,
-            PROMPT.format(profile=_profile_brief(profile), flows=flows_text),
-            cwd=work,
-            allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
-            servers=[device],
-            model=model,
-            timeout=timeout,
-            name="explore",
-            llm=llm,
-        )
+                                  ["--app-dir", str(app_dir), "--source", str(work), "--out", str(out),
+                                   "--max-screens", str(max_screens), "--deadline", str(started + minutes * 60)])
+        try:
+            result = agents.run(
+                agent,
+                PROMPT.format(profile=_profile_brief(profile), flows=flows_text + limits),
+                cwd=work,
+                allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
+                servers=[device],
+                model=model,
+                timeout=hard_timeout,
+                name="explore",
+                llm=llm,
+                max_budget_usd=max_usd,
+            )
+            cost, session, summary = result.cost_usd, result.session_id, result.text
+        except claude_code.ClaudeCodeError as e:
+            if not out.exists():
+                raise
+            cost, session = 0.0, ""
+            summary = f"stopped at the limit ({e}); keeping the {len(ScreenMap.load(out).screens)} screens recorded so far."
     if not out.exists():
-        raise claude_code.ClaudeCodeError(f"exploration produced no graph: {result.text[:400]}")
-    return ClaudeExploreResult(ScreenMap.load(out), result.cost_usd, result.seconds, result.session_id, result.text)
+        raise claude_code.ClaudeCodeError(f"exploration produced no graph: {summary[:400]}")
+    return ClaudeExploreResult(ScreenMap.load(out), cost, round(time.time() - started, 1), session, summary)
 
 
-def verify_paths(ctx: Context, smap: ScreenMap) -> dict[str, str]:
-    """Replay every screen's recorded path from a fresh launch and check it lands on that screen."""
+def verify_paths(ctx: Context, smap: ScreenMap, minutes: float = 0) -> dict[str, str]:
+    """Replay every screen's recorded path from a fresh launch and check it lands on that screen. Shortest paths
+    first; with a time limit, screens not reached in time are reported as 'not checked' (they stay in the map)."""
+    import time
+    deadline = time.time() + minutes * 60 if minutes else 0
     driver = AppDriver(ctx, ctx.run_dir / "verify-paths")
     results: dict[str, str] = {}
-    for sid, info in smap.screens.items():
+    for sid, info in sorted(smap.screens.items(), key=lambda kv: len(kv[1].path)):
+        if deadline and time.time() > deadline:
+            results[sid] = "not checked"
+            continue
         try:
             driver.fresh(clear_data=True)
             driver.go_to(Target(name=sid, steps=list(info.path)))

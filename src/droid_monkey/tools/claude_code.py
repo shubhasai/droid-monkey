@@ -44,13 +44,15 @@ def run(
     mcp_config: Path | None = None,
     disallowed_tools: list[str] | None = None,
     name: str = "session",
+    max_budget_usd: float | None = None,
 ) -> ClaudeResult:
     """One `claude -p` session, traced in neatlogs as an LLM span with Claude Code's own token and cost report."""
     from .. import tracing
     tracing.init()
     span = tracing.ClaudeCodeSpan(name, model, prompt)
     try:
-        result = _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallowed_tools)
+        result = _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallowed_tools,
+                      max_budget_usd)
     except ClaudeCodeError as e:
         span.end(error=str(e))
         raise
@@ -58,7 +60,8 @@ def run(
     return result
 
 
-def _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallowed_tools) -> ClaudeResult:
+def _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallowed_tools,
+         max_budget_usd=None) -> ClaudeResult:
     cmd = [claude_path(), "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
            "--allowedTools", ",".join(allowed_tools)]
     if mcp_config:
@@ -67,6 +70,8 @@ def _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallo
         cmd += ["--model", model]
     if resume:
         cmd += ["--resume", resume]
+    if max_budget_usd:
+        cmd += ["--max-budget-usd", f"{max_budget_usd:.2f}"]
     if disallowed_tools:
         cmd += ["--disallowedTools", *disallowed_tools]  # variadic flag: keep it last
     env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "DROID_MONKEY_API_KEY")}

@@ -36,8 +36,9 @@ def replay_step(node: ui.Node, selector: str) -> str:
 
 
 class GraphRecorder:
-    def __init__(self, app_dir: Path, source_dir: Path, out: Path):
+    def __init__(self, app_dir: Path, source_dir: Path, out: Path, max_screens: int = 0, deadline: float = 0):
         cfg = config_mod.load(app_dir)
+        self.max_screens, self.deadline = max_screens, deadline  # 0: no limit
         serial = emulator.running_emulator()
         adb = Adb(serial) if serial else emulator.boot(cfg.avd or emulator.list_avds()[0])
         run_dir = out.parent
@@ -109,7 +110,17 @@ class GraphRecorder:
         texts = [n.text for n in screen.app_nodes(self.package) if n.text and not n.editable][:15]
         if texts:
             lines.append("visible text: " + " | ".join(t[:40] for t in texts))
+        if limit := self.limit_note():
+            lines.append(limit)
         return "\n".join(lines)
+
+    def limit_note(self) -> str:
+        """Tell the explorer to wrap up before droid-monkey stops it."""
+        if self.max_screens and len(self.map.screens) >= self.max_screens:
+            return f"LIMIT: {self.max_screens} screens recorded, the most this run allows. Call finish now."
+        if self.deadline and self.deadline - time.time() < 90:
+            return "LIMIT: under 90 s of exploring time left. Call finish now with the unreached screens."
+        return ""
 
     def resolve(self, target: str) -> ui.Node:
         target = target.strip()
@@ -262,6 +273,8 @@ class GraphRecorder:
         if existing:
             self.set_current(existing)
             return f"this screen is already recorded as '{existing}'"
+        if self.max_screens and len(self.map.screens) >= self.max_screens:
+            return f"not recorded: {self.max_screens} screens is the limit for this run. Call finish now."
         sid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or f"screen_{len(self.map.screens) + 1}"
         fp = screen.fingerprint(self.package)
         if self.previous:  # stable ids: the same screen as last time keeps last time's id
@@ -295,7 +308,8 @@ class GraphRecorder:
         except Exception:  # evidence is best effort; the map is what matters here
             pass
         note = f" Files not found in the source: {missing}." if missing else ""
-        return f"recorded '{sid}' (path {len(self.path)} steps, {len(fields)} input fields, {len(found)} files).{note}"
+        limit = f" {self.limit_note()}" if self.limit_note() else ""
+        return f"recorded '{sid}' (path {len(self.path)} steps, {len(fields)} input fields, {len(found)} files).{note}{limit}"
 
     def graph_status(self) -> str:
         lines = [f"{len(self.map.screens)} screens, {len(self.map.edges)} edges, {len(self.map.crashes)} crashes, "
@@ -323,8 +337,8 @@ class GraphRecorder:
             self.map.edges.append(edge)
 
 
-def serve(app_dir: Path, source_dir: Path, out: Path) -> None:
-    rec = GraphRecorder(app_dir, source_dir, out)
+def serve(app_dir: Path, source_dir: Path, out: Path, max_screens: int = 0, deadline: float = 0) -> None:
+    rec = GraphRecorder(app_dir, source_dir, out, max_screens, deadline)
     server = MCPServer("device", instructions="Drive the Android app under test and record its screen graph.")
 
     def safe(fn):
@@ -396,8 +410,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--app-dir", required=True, type=Path)
     p.add_argument("--source", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument("--max-screens", type=int, default=0)
+    p.add_argument("--deadline", type=float, default=0, help="unix time when exploring must end")
     a = p.parse_args(argv)
-    serve(a.app_dir, a.source, a.out)
+    serve(a.app_dir, a.source, a.out, a.max_screens, a.deadline)
 
 
 if __name__ == "__main__":

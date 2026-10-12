@@ -253,8 +253,14 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
                    "manual: you drive the app on the emulator and droid-monkey records the screens and paths. "
                    "rules: free tap-everything exploration without a model. (claude is the old name for agent.)")
 @click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for agent mode.")
+@click.option("--minutes", type=float, default=None, help="Agent mode time limit (default: explore_minutes in "
+              "monkey.yaml, 10). What was mapped by then is kept.")
+@click.option("--max-screens", type=int, default=None, help="Agent mode screen limit (default: explore_max_screens, 60).")
+@click.option("--from-partial", is_flag=True, help="Don't explore: keep the map an interrupted agent run saved "
+              "(screen-map.partial.json), check its paths and make it the map.")
 @AGENT
-def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
+def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: float | None,
+            max_screens: int | None, from_partial: bool) -> None:
     """Explore the installed app and save its screen graph (no faults injected)."""
     theme.banner("explore")
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
@@ -292,21 +298,34 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
         prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
         backend, model = _agent(ctx.cfg, agent, model)
         partial = paths.partial_map_path(ctx.cfg.app_dir)
-        with theme.working("swinging through your screens (reading the code and driving the app)..."):
-            res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model,
-                                     agent=backend, llm=ctx.cfg.llm)
-        smap = res.smap
-        theme.ok(f"explored in {res.seconds:.0f}s, ${res.cost_usd:.2f}")
-        click.echo(f"\n{res.summary[:1500]}")
-        theme.header("replaying every recorded path")
+        if from_partial:
+            if not partial.exists():
+                raise click.ClickException(f"no partial map at {partial}")
+            smap = ScreenMap.load(partial)
+            theme.ok(f"kept the interrupted run's map: {len(smap.screens)} screens")
+        else:
+            minutes = minutes or ctx.cfg.explore_minutes
+            max_screens = max_screens or ctx.cfg.explore_max_screens
+            limit = f"{minutes:g} min, {max_screens} screens" + (
+                f", ${ctx.cfg.explore_max_usd:g}" if ctx.cfg.explore_max_usd else "")
+            with theme.working(f"swinging through your screens (reading the code and driving the app; limit {limit})..."):
+                res = claude_explore.run(ctx.cfg.app_dir, prof, partial, load_flows(ctx.cfg.app_dir), model=model,
+                                         minutes=minutes, max_screens=max_screens, max_usd=ctx.cfg.explore_max_usd,
+                                         agent=backend, llm=ctx.cfg.llm)
+            smap = res.smap
+            theme.ok(f"explored {len(smap.screens)} screens in {res.seconds:.0f}s, ${res.cost_usd:.2f}")
+            click.echo(f"\n{res.summary[:1500]}")
+        theme.header(f"replaying every recorded path (limit {ctx.cfg.verify_minutes:g} min)")
         with theme.working("retracing the monkey's steps..."):
-            checks = claude_explore.verify_paths(ctx, smap)
+            checks = claude_explore.verify_paths(ctx, smap, minutes=ctx.cfg.verify_minutes)
         for sid, verdict in checks.items():
             if verdict == "ok":
                 click.echo(f"  {style('(^.^)', fg='green')} {sid:24} " + style("replays", fg="green"))
+            elif verdict == "not checked":
+                click.echo(f"  {style('(-.-)', fg='yellow')} {sid:24} " + style("not checked (time limit)", fg="yellow"))
             else:
                 click.echo(f"  {style('(x_x)', fg='red')} {sid:24} " + style(verdict, fg="red"))
-        bad = [sid for sid, v in checks.items() if v != "ok"]
+        bad = [sid for sid, v in checks.items() if v not in ("ok", "not checked")]
         if bad:
             smap.unreached += [{"screen": sid, "reason": f"recorded path does not replay ({checks[sid]})"} for sid in bad]
         smap.save(_map_path(ctx))  # replaces the previous map only now that the run finished and was checked

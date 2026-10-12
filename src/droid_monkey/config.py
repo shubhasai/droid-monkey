@@ -32,6 +32,10 @@ class AppConfig:
     agent: str = "auto"              # coding agent: auto | claude | codex | api (see agents.py)
     screens_per_attack: int = 2      # each built-in attack runs on this many of its best screens
     explore_breadth: int = 5         # elements tried per screen by the fast explorers
+    explore_minutes: float = 10      # agent explore: time limit; what was mapped by then is kept
+    explore_max_screens: int = 60    # agent explore: stop recording new screens after this many
+    explore_max_usd: float | None = None  # agent explore: spend limit (Claude Code only)
+    verify_minutes: float = 10       # time limit for replaying the recorded paths after exploring
     live_backend: bool = True        # false only for a test or fake backend: then sign-up, publish, pay... may be tapped
     allow_actions: list[str] = field(default_factory=list)  # labels that are safe to tap even on the live backend
     agent_model: str | None = None   # optional model for that agent
@@ -56,6 +60,10 @@ def load(app_dir: Path) -> AppConfig:
         screens_per_attack=int(raw.get("screens_per_attack") or 2),
         live_backend=raw.get("live_backend", True) is not False,
         explore_breadth=int(raw.get("explore_breadth") or 5),
+        explore_minutes=float(raw.get("explore_minutes") or 10),
+        explore_max_screens=int(raw.get("explore_max_screens") or 60),
+        explore_max_usd=float(raw["explore_max_usd"]) if raw.get("explore_max_usd") else None,
+        verify_minutes=float(raw.get("verify_minutes") or 10),
         allow_actions=[str(a) for a in (raw.get("allow_actions") or [])],
         agent_model=raw.get("agent_model"),
     )
