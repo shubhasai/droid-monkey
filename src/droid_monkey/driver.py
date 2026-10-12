@@ -78,6 +78,7 @@ class AppDriver:
         self.device.set_rotation(0)  # Android 16 may restore the app's last orientation on launch
         for step in self.cfg.entry_steps:  # written by the developer (e.g. a test-account login): trusted
             self.step(step, trusted=True)
+            self.settle(timeout=self.NAV_SETTLE)
 
     def target(self, screen_id: str) -> Target:
         found = self.ctx.targets.get(screen_id)
@@ -85,9 +86,14 @@ class AppDriver:
             raise NavigationError(f"unknown screen '{screen_id}': run `droid-monkey explore` first")
         return found
 
+    NAV_SETTLE = 6.0  # s: how long a navigation step may take to finish its transition
+
     def go_to(self, target: Target) -> None:
+        """Walk a recorded path. Each step waits for the screen to settle, as it did when the path was recorded:
+        a tap fired mid-transition (a pager still sliding, an activity still opening) lands on the wrong page."""
         for step in target.steps:
             self.step(step)
+            self.settle(timeout=self.NAV_SETTLE)
         if target.fill:
             self.fill_form()
 

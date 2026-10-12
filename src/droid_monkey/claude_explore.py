@@ -159,6 +159,7 @@ def verify_paths(ctx: Context, smap: ScreenMap, minutes: float = 0) -> dict[str,
             for i, step in enumerate(steps):
                 try:
                     driver.step(step)
+                    driver.settle(timeout=driver.NAV_SETTLE)  # as when it was recorded (see AppDriver.go_to)
                 except NavigationError as e:
                     dead[tuple(steps[:i + 1])] = f"fails: {e}"
                     raise

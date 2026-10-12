@@ -178,6 +178,7 @@ class Explorer:
         self.d.fresh(clear_data=True)  # paths are recorded from a clean data state
         for step in info.path:
             self.d.step(step)
+            self.d.settle(timeout=self.d.NAV_SETTLE)  # see AppDriver.go_to
         if info.has_form:
             self.d.fill_form()
         screen, _, _ = self.d.settle()

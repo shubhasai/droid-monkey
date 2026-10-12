@@ -264,8 +264,8 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
 @click.option("--minutes", type=float, default=None, help="Agent mode time limit (default: explore_minutes in "
               "monkey.yaml, 10). What was mapped by then is kept.")
 @click.option("--max-screens", type=int, default=None, help="Agent mode screen limit (default: explore_max_screens, 60).")
-@click.option("--from-partial", is_flag=True, help="Don't explore: keep the map an interrupted agent run saved "
-              "(screen-map.partial.json), check its paths and make it the map.")
+@click.option("--from-partial", is_flag=True, help="Don't explore: re-check the paths of the map an interrupted "
+              "agent run saved (screen-map.partial.json), or of the saved map, and make it the map.")
 @AGENT
 def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: float | None,
             max_screens: int | None, from_partial: bool) -> None:
@@ -307,10 +307,12 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: fl
         backend, model = _agent(ctx.cfg, agent, model)
         partial = paths.partial_map_path(ctx.cfg.app_dir)
         if from_partial:
-            if not partial.exists():
-                raise click.ClickException(f"no partial map at {partial}")
-            smap = ScreenMap.load(partial)
-            theme.ok(f"kept the interrupted run's map: {len(smap.screens)} screens")
+            source = partial if partial.exists() else _map_path(ctx)
+            if not source.exists():
+                raise click.ClickException(f"no map to check at {partial} or {_map_path(ctx)}")
+            smap = ScreenMap.load(source)
+            smap.unreached = [u for u in smap.unreached if not u.get("reason", "").startswith("recorded path does not replay")]
+            theme.ok(f"re-checking the {'interrupted' if source == partial else 'saved'} map: {len(smap.screens)} screens")
         else:
             minutes = minutes or ctx.cfg.explore_minutes
             max_screens = max_screens or ctx.cfg.explore_max_screens
