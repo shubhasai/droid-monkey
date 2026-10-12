@@ -114,3 +114,14 @@ def test_a_fix_can_close_the_same_bug_reported_twice(tmp_path):
     assert found["ux"].status == found["hunt"].status == "fixed"
     assert found["hunt"].branch == "droid-monkey/fix-ux" and found["hunt"].fixed_with == "Label the heart"
     assert found["attack"].status == "open"
+
+
+def test_an_issue_is_only_gone_when_its_element_is_on_screen():
+    from types import SimpleNamespace as N
+    from droid_monkey.fixer import on_screen
+    node = lambda rid, text: N(rid=rid, text=text, area=10)
+    covered = N(nodes=[node("", "Deal unlocked"), node("", "10% off Banana Bunch, today only.")])
+    detail = N(nodes=[node("dispatch", "Ships in 5 days"), node("free_delivery", "Free delivery")])
+    assert not on_screen(covered, "ph:dispatch")       # a popup hides it: not checked, never "gone"
+    assert on_screen(detail, "ph:dispatch") and on_screen(detail, "neg:free_delivery")
+    assert on_screen(covered, "crash:IllegalStateException@x")  # not tied to one element

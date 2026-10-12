@@ -49,6 +49,16 @@ def explain(x: Issue) -> str:
     return "\n".join(lines)
 
 
+def on_screen(screen, key: str) -> bool:
+    """Is the element a screen issue was found on visible? Keys name it: ph:<id>, neg:<id> (a resource id or test
+    tag, or the start of the text). Other issues (logs, crashes, logic) have no single element: True."""
+    kind, _, ident = key.partition(":")
+    if kind not in ("ph", "neg") or not ident:
+        return True
+    return any(n.area > 0 and (n.rid == ident or n.rid.endswith("/" + ident) or n.text.startswith(ident))
+               for n in screen.nodes)
+
+
 def still_there(ctx: Context, x: Issue, folder: str = "recheck") -> bool | None:
     """Re-walk a hunt issue's steps from a clean launch and run the same detectors. None: could not check."""
     from . import hunt
@@ -59,7 +69,11 @@ def still_there(ctx: Context, x: Issue, folder: str = "recheck") -> bool | None:
             d.step(step)
             d.settle(timeout=d.NAV_SETTLE)
         screen, _, _ = d.settle(timeout=d.NAV_SETTLE)
+        if not on_screen(screen, x.key) and d.close_interruption(screen):  # a popup over the element: close it once
+            screen, _, _ = d.settle(timeout=d.NAV_SETTLE)
         d.snapshot("after")
+        if not on_screen(screen, x.key):
+            return None  # the element the issue was found on is not visible: not checked, never "gone"
         log = ctx.adb.run("logcat", "-d", "-v", "threadtime", "-b", "main,system")
         pid = ctx.device.pid()
         seen = hunt.check_screen(screen, ctx.cfg.package) + hunt.scan_logs(log, ctx.cfg.package, {pid} if pid else set())
