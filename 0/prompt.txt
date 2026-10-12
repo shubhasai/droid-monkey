@@ -1,0 +1,5 @@
+commit  with entire checkpoint and push
+
+---
+
+without .droid-monkey folder the dashboard does not launch it should launch after init

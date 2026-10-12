@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4QT9V2ZJS13YSXGZ58DDKD3",
+  "session_id": "ccf1fba9-ba0f-4508-8ff2-4cfbf6dd6cf6",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-12T10:25:00.169533Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "src/droid_monkey/cli.py",
+    "src/droid_monkey/jobs.py",
+    "src/droid_monkey/live.py",
+    "tests/test_issues.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "e238865bb216",
+  "checkpoint_transcript_start": 1322,
+  "transcript_lines_at_start": 1322,
+  "compact_transcript_start": 145,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 277634,
+    "cache_read_tokens": 4323825,
+    "output_tokens": 7509,
+    "api_call_count": 15
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-12T10:25:00.126246Z",
+    "agent_lines": 371,
+    "agent_removed": 68,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 1,
+    "total_committed": 372,
+    "total_lines_changed": 441,
+    "agent_percentage": 99.54648526077098,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 365,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "src/droid_monkey/cli.py": 67,
+        "src/droid_monkey/fixer.py": 126,
+        "src/droid_monkey/issues.py": 172
+      },
+      "user_removed_per_file": {
+        "src/droid_monkey/cli.py": 2
+      }
+    }
+  ]
+}
