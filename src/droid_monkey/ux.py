@@ -3,10 +3,14 @@
 1. Measure (code only): for every mapped screen, how many taps it takes to reach (the shortest route through the
    screen map) against the route recorded, touch targets under Android's 48 dp minimum, icon buttons with no label
    for screen readers, slow actions, long forms, dead ends.
-2. Review (Anthropic API, with vision): the model sees every screen's screenshot, the measurements, the user flows
-   and the analysis, can read and search the source, and writes findings: the flow, the problem, the evidence
-   (screens, numbers), why it matters, a concrete change and the files it touches.
-3. Apply, only with your yes: the API coding agent makes the change on a droid-monkey/ux-<run> branch, the app is
+2. Predict (no model): where attention is likely to go on every screen (attention.py: a heatmap and each control's
+   share, flags when the screen's primary action is easy to miss) and how long users wait on the way to each
+   screen, judged against the response-time limits, with a conversion benchmark (perf_impact.py).
+3. Review (Anthropic API, with vision): the model sees every screen's screenshot, the measurements and predictions,
+   the user flows and the analysis, can read and search the source, and writes findings. A finding must rest on a
+   screen it saw or a measurement; what only the code suggests is kept apart as "suspected in code, not observed",
+   at low severity, for the attacks to confirm.
+4. Apply, only with your yes: the API coding agent makes the change on a droid-monkey/ux-<run> branch, the app is
    rebuilt and reinstalled, the path to the screen is replayed and an "after" screenshot is taken next to the
    "before" one, then it is committed. Declined findings stay in UX_AUDIT.md as suggestions.
 """
@@ -127,6 +131,7 @@ class Finding:
     severity: str = "medium"      # high | medium | low
     kind: str = "navigation"      # navigation | accessibility | feedback | forms | performance | content
     status: str = "proposed"      # proposed | applied | declined | failed
+    observed: bool = True         # rests on a screen the review saw or a measurement; False: suspected from code
     commit: str | None = None
     before: str | None = None
     after: str | None = None
@@ -141,6 +146,14 @@ Find what makes the main user flows slower, harder or less accessible than they 
 changes a developer can make in this codebase. Rules:
 - Every finding cites evidence: screen ids, a measurement (taps, dp, seconds, field counts) or what a screenshot
   shows. No finding without evidence; no generic advice.
+- "observed": true only when the finding rests on a screen in its "screens" list (what its screenshot or
+  measurements show). Each evidence item of an observed finding starts with that screen id. A problem you only
+  see in the code, on a screen nobody reached (state lost on recreation, an unhandled error), is "observed":
+  false: list it, but it is a suspicion for droid-monkey's attacks to confirm, not a UX finding.
+- Predicted attention is a model's prediction (image salience plus UI structure), not eye tracking: say
+  "predicted" when you use it. Use it for findings about a primary action that is easy to miss or out-competed.
+- Waiting times are measured; the conversion figure is an industry benchmark: quote it as a benchmark, never as
+  this app's forecast. A step over 1 s breaks the user's flow; prefer fixes that show progress or remove the wait.
 - Prefer high-impact issues on the main flows: extra steps, dead ends, missing feedback, unlabeled controls,
   small touch targets, confusing order, long forms, permission asked too early.
 - The change must be specific and implementable in this code (name the files; read them first) and must not
@@ -152,7 +165,7 @@ Reply with ONLY this JSON, no prose:
   "screens": ["screen ids"], "problem": "2-3 sentences", "evidence": ["screen_id: what shows it"],
   "why": "the user impact in one sentence", "change": "the concrete change, 2-4 sentences",
   "files": ["repo-relative paths"], "severity": "high|medium|low",
-  "kind": "navigation|accessibility|feedback|forms|performance|content"}}]}}"""
+  "kind": "navigation|accessibility|feedback|forms|performance|content|attention", "observed": true}}]}}"""
 
 
 def _image_block(png: Path, width: int = 360) -> dict:
@@ -168,7 +181,8 @@ def _image_block(png: Path, width: int = 360) -> dict:
 
 
 def review(app_dir: Path, module: str, llm, smap: ScreenMap, facts: dict, flows: list[dict], analysis: str,
-           model: str = REVIEW_MODEL, max_findings: int = 8, max_turns: int = 20) -> tuple[list[Finding], dict]:
+           model: str = REVIEW_MODEL, max_findings: int = 8, max_turns: int = 20, attention: dict | None = None,
+           waits: dict | None = None) -> tuple[list[Finding], dict]:
     from dataclasses import replace
 
     from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -189,6 +203,10 @@ def review(app_dir: Path, module: str, llm, smap: ScreenMap, facts: dict, flows:
     content: list = [{"type": "text", "text": (
         "User flows:\n" + json.dumps(flows, indent=1)[:12000] + "\n\nAnalysis:\n" + analysis[:6000]
         + "\n\nMeasurements per screen:\n" + json.dumps(facts, indent=1)[:20000]
+        + ("\n\nPredicted attention per screen (share of predicted attention per control, the likely primary action "
+           "and its rank, and flags):\n" + json.dumps(attention, indent=1)[:12000] if attention else "")
+        + ("\n\nMeasured waiting (per flow and per slow step), the limits and the benchmark:\n"
+           + json.dumps(waits, indent=1)[:8000] if waits else "")
         + "\n\nScreens (id, title, recorded path); each screenshot follows its line:")}]
     for sid, s in smap.screens.items():
         content.append({"type": "text", "text": f"{sid}: {s.title} | path: {' > '.join(s.path[-6:]) or '(launch)'}"})
@@ -220,35 +238,145 @@ def review(app_dir: Path, module: str, llm, smap: ScreenMap, facts: dict, flows:
         findings = []
         for f in raw:
             files = [p.lstrip("./") for p in f.get("files", []) if (app_dir / p.lstrip("./")).is_file()]
-            findings.append(Finding(id=re.sub(r"[^a-z0-9_]", "_", str(f.get("id", "finding")).lower())[:40],
-                                    title=f.get("title", ""), flow=f.get("flow", ""),
-                                    screens=[s for s in f.get("screens", []) if s in known],
-                                    problem=f.get("problem", ""), evidence=list(f.get("evidence", [])),
-                                    why=f.get("why", ""), change=f.get("change", ""), files=files,
-                                    severity=f.get("severity", "medium"), kind=f.get("kind", "navigation")))
+            finding = Finding(id=re.sub(r"[^a-z0-9_]", "_", str(f.get("id", "finding")).lower())[:40],
+                              title=f.get("title", ""), flow=f.get("flow", ""),
+                              screens=[s for s in f.get("screens", []) if s in known],
+                              problem=f.get("problem", ""), evidence=list(f.get("evidence", [])),
+                              why=f.get("why", ""), change=f.get("change", ""), files=files,
+                              severity=f.get("severity", "medium"), kind=f.get("kind", "navigation"),
+                              observed=f.get("observed", True) is not False)
+            findings.append(check_observed(finding))
         return findings, {"model": model, "input_tokens": tin, "output_tokens": tout,
                           "cost_usd": cost_usd(model, tin, tout)}
     raise RuntimeError("the UX review did not produce findings")
 
 
-def write_report(app_dir: Path, findings: list[Finding], usage: dict) -> Path:
+def check_observed(f: Finding) -> Finding:
+    """An observed finding needs a screen it cites in its evidence. Otherwise it is a suspicion from the code:
+    kept, but at low severity and apart from the UX findings."""
+    cited = any(e.split(":", 1)[0].strip().strip("`") in f.screens for e in f.evidence) if f.screens else False
+    if f.observed and not cited:
+        f.observed = False
+    if not f.observed:
+        f.severity = "low"
+        f.note = (f.note + " " if f.note else "") + ("Suspected in code, not observed on a screen: confirm it with an "
+                                                     "attack (`droid-monkey attacks from-flows --all-flows`).")
+    return f
+
+
+def _finding_md(f: Finding) -> list[str]:
+    lines = [f"### {f.title}", "", f"`{f.id}` · {f.severity} · {f.kind} · flow: {f.flow} · status: **{f.status}**"
+             + (f" · commit `{f.commit[:8]}`" if f.commit else ""), "",
+             f"**Problem.** {f.problem}", "", "**Evidence.**"] + [f"- {e}" for e in f.evidence] + [
+             "", f"**Why it matters.** {f.why}", "", f"**Change.** {f.change}", "",
+             f"**Files.** {', '.join(f'`{p}`' for p in f.files) or '-'}", ""]
+    if f.before or f.after:
+        lines += [f"Before: `{f.before}` · After: `{f.after}`", ""]
+    if f.note:
+        lines += [f"_{f.note}_", ""]
+    return lines
+
+
+def write_report(app_dir: Path, findings: list[Finding], usage: dict, attention: dict | None = None,
+                 waits: dict | None = None) -> Path:
+    from . import attention as att_mod
     out = paths.data_dir(app_dir) / "UX_AUDIT.md"
-    lines = ["# UX audit", "", f"{len(findings)} findings · review by {usage.get('model')} · "
-             f"{usage.get('input_tokens', 0):,} in / {usage.get('output_tokens', 0):,} out tokens, "
-             f"${(usage.get('cost_usd') or 0):.3f}", ""]
-    for f in findings:
-        lines += [f"## {f.title}", "", f"`{f.id}` · {f.severity} · {f.kind} · flow: {f.flow} · status: **{f.status}**"
-                  + (f" · commit `{f.commit[:8]}`" if f.commit else ""), "",
-                  f"**Problem.** {f.problem}", "", "**Evidence.**"] + [f"- {e}" for e in f.evidence] + [
-                  "", f"**Why it matters.** {f.why}", "", f"**Change.** {f.change}", "",
-                  f"**Files.** {', '.join(f'`{p}`' for p in f.files) or '-'}", ""]
-        if f.before or f.after:
-            lines += [f"Before: `{f.before}` · After: `{f.after}`", ""]
-        if f.note:
-            lines += [f"_{f.note}_", ""]
+    if attention is None or waits is None:  # a rewrite after applying changes: keep the predictions already made
+        prev = paths.data_dir(app_dir) / "ux-audit.json"
+        old = json.loads(prev.read_text()) if prev.exists() else {}
+        if attention is None:
+            attention = {k: att_mod.Attention(**{**{f: v[f] for f in v if f != "flags"},
+                                                 "elements": [att_mod.ElementShare(**{**el, "bounds": tuple(el["bounds"])})
+                                                              for el in v.get("elements", [])]})
+                         for k, v in (old.get("attention") or {}).items()}
+        waits = waits if waits is not None else old.get("waits") or {}
+    seen = [f for f in findings if f.observed]
+    suspected = [f for f in findings if not f.observed]
+    lines = ["# UX audit", "", f"{len(seen)} findings on screens, {len(suspected)} suspected in code · review by "
+             f"{usage.get('model')} · {usage.get('input_tokens', 0):,} in / {usage.get('output_tokens', 0):,} out "
+             f"tokens, ${(usage.get('cost_usd') or 0):.3f}", "", "## Findings", ""]
+    for f in seen:
+        lines += _finding_md(f)
+    if suspected:
+        lines += ["## Suspected in code, not observed", "",
+                  "The review saw these in the code only, on screens nobody reached. They are not UX findings yet: "
+                  "an attack has to reproduce them.", ""]
+        for f in suspected:
+            lines += _finding_md(f)
+    if attention:
+        lines += ["## Predicted attention", "", "A prediction from each screenshot and its UI structure (image salience "
+                  "plus size, contrast and reading-order biases), not eye tracking. Heatmaps: "
+                  f"`{paths.data_dir(app_dir) / 'attention'}`.", "",
+                  "| screen | primary action | its share (rank) | most attention | flags |", "|---|---|---|---|---|"]
+        for sid, a in attention.items():
+            prim = f"{a.primary_share:.0%} (#{a.primary_rank})" if a.primary else "-"
+            lines.append(f"| {sid} | {a.primary or '-'} | {prim} | {a.top_region[:40]} ({a.top_share:.0%}) | "
+                         f"{'; '.join(att_mod.flags(a)) or '-'} |")
+        lines.append("")
+    if waits:
+        lines += ["## Waiting time", "", f"Cold start (median of the slow_startup attack): "
+                  f"{waits.get('cold_start_s') or 'not measured'} s. Limits: 0.1 s feels instant, 1 s keeps the "
+                  "user's flow, 10 s loses attention.", ""]
+        lines += [f"- {s}" for s in waits.get("slow_steps", [])] or ["- no step over 1 s"]
+        lines += ["", f"_{waits.get('benchmark', '')}_", "", f"_{waits.get('note', '')}_", ""]
     out.write_text("\n".join(lines))
     (paths.data_dir(app_dir) / "ux-audit.json").write_text(json.dumps(
-        {"usage": usage, "findings": [asdict(f) for f in findings]}, indent=2))
+        {"usage": usage, "findings": [asdict(f) for f in findings],
+         "attention": {k: {**asdict(v), "flags": att_mod.flags(v)} for k, v in (attention or {}).items()},
+         "waits": waits or {}}, indent=2))
+    write_html(app_dir, findings, usage, attention or {}, waits or {})
+    return out
+
+
+def write_html(app_dir: Path, findings: list[Finding], usage: dict, attention: dict, waits: dict) -> Path:
+    """ux-audit.html: findings, then every screen's predicted-attention heatmap with its controls' shares."""
+    import html
+    from . import attention as att_mod
+    e = html.escape
+    out = paths.data_dir(app_dir) / "ux-audit.html"
+    base = paths.data_dir(app_dir)
+
+    def card(f: Finding) -> str:
+        shots = "".join(f'<img src="{e(str((base / "attention" / (s + ".jpg")).relative_to(base)))}" alt="{e(s)}">'
+                        for s in f.screens[:3] if (base / "attention" / f"{s}.jpg").exists())
+        return (f'<article class="f {e(f.severity)}"><h3>{e(f.title)}</h3><p class="meta">{e(f.severity)} · {e(f.kind)}'
+                f' · {e(f.flow)}</p><p>{e(f.problem)}</p><ul>' + "".join(f"<li>{e(x)}</li>" for x in f.evidence)
+                + f'</ul><p><b>Change.</b> {e(f.change)}</p>' + (f'<p class="note">{e(f.note)}</p>' if f.note else "")
+                + (f'<div class="shots">{shots}</div>' if shots else "") + "</article>")
+
+    screens = []
+    for sid, a in attention.items():
+        rows = "".join(f"<tr{' class=\"p\"' if el.label == a.primary else ''}><td>{e(el.label[:40])}</td>"
+                       f"<td>{el.share:.0%}</td></tr>" for el in a.elements[:6])
+        fl = "".join(f'<p class="flag">{e(x)}</p>' for x in att_mod.flags(a))
+        screens.append(f'<figure><img src="attention/{e(sid)}.jpg" alt="{e(sid)}"><figcaption><b>{e(sid)}</b>{fl}'
+                       f'<table>{rows}</table></figcaption></figure>')
+    waits_html = "".join(f"<li>{e(x)}</li>" for x in waits.get("slow_steps", [])) or "<li>no step over 1 s</li>"
+    seen = [f for f in findings if f.observed]
+    suspected = [f for f in findings if not f.observed]
+    doc = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UX audit</title><style>
+:root{{--bg:#f7f6f2;--fg:#1d1d1b;--mute:#6b6a65;--card:#fff;--line:#e3e1da;--hi:#c2410c;--md:#b45309;--lo:#4b5563}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#151513;--fg:#ecebe6;--mute:#9b9a94;--card:#1f1f1c;--line:#33322e}}}}
+body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;margin:0;padding:24px 16px}}
+main{{max-width:1180px;margin:auto}} h1{{margin:0 0 4px}} .sub,.meta,.note{{color:var(--mute)}}
+.f{{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--lo);border-radius:8px;padding:12px 16px;margin:12px 0}}
+.f.high{{border-left-color:var(--hi)}} .f.medium{{border-left-color:var(--md)}} .f h3{{margin:0}}
+.shots{{display:flex;gap:8px;flex-wrap:wrap}} .shots img{{width:160px;border-radius:6px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px}}
+figure{{margin:0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px}}
+figure img{{width:100%;border-radius:6px}} table{{width:100%;font-size:13px;border-collapse:collapse}}
+td{{padding:2px 4px;border-top:1px solid var(--line)}} td+td{{text-align:right;font-variant-numeric:tabular-nums}}
+tr.p td{{font-weight:600}} .flag{{color:var(--hi);font-size:13px;margin:4px 0}}
+</style></head><body><main>
+<h1>UX audit</h1><p class="sub">{len(seen)} findings on screens · {len(suspected)} suspected in code · review by {e(str(usage.get('model')))} · ${(usage.get('cost_usd') or 0):.2f}</p>
+<h2>Findings</h2>{''.join(card(f) for f in seen) or '<p>none</p>'}
+{('<h2>Suspected in code, not observed</h2><p class="sub">Seen in the code only, on screens nobody reached: an attack has to reproduce them.</p>' + ''.join(card(f) for f in suspected)) if suspected else ''}
+<h2>Waiting time</h2><p class="sub">Measured from tap to settled screen. Cold start {e(str(waits.get('cold_start_s') or 'not measured'))} s. 0.1 s feels instant, 1 s keeps the flow, 10 s loses attention.</p><ul>{waits_html}</ul>
+<p class="sub">{e(waits.get('benchmark', ''))}</p>
+<h2>Predicted attention</h2><p class="sub">A prediction from each screenshot and its UI structure, not eye tracking. The white box is the screen's likely primary action; shares are of the whole screen's predicted attention.</p>
+<div class="grid">{''.join(screens)}</div></main></body></html>"""
+    out.write_text(doc)
     return out
 
 
@@ -338,9 +466,16 @@ def render(f: Finding) -> str:
 
 def run_audit(ctx, smap: ScreenMap, flows: list[dict], analysis: str,
               review_model: str = REVIEW_MODEL) -> tuple[list[Finding], dict, Path]:
-    """Measure and review; writes UX_AUDIT.md and ux-audit.json. Applying is the caller's, finding by finding."""
+    """Measure, predict and review; writes UX_AUDIT.md, ux-audit.html and ux-audit.json. Applying is the caller's,
+    finding by finding."""
+    from . import attention as att_mod, perf_impact
     tracing.init(tags=[f"ux:{ctx.run_dir.name}", f"app:{ctx.cfg.package}"])
     facts = measure(ctx.cfg.app_dir, smap, _density(ctx.adb))
+    attention = att_mod.audit(ctx.cfg.app_dir, smap.package, list(smap.screens),
+                              paths.data_dir(ctx.cfg.app_dir) / "attention")
+    waits = perf_impact.facts(ctx.cfg.app_dir, smap, flows)
     findings, usage = review(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, smap, facts, flows, analysis,
-                             model=review_model)
-    return findings, usage, write_report(ctx.cfg.app_dir, findings, usage)
+                             model=review_model, attention={k: {**v.summary(), "flags": att_mod.flags(v)}
+                                                            for k, v in attention.items()}, waits=waits)
+    findings.sort(key=lambda f: (not f.observed, {"high": 0, "medium": 1, "low": 2}.get(f.severity, 3)))
+    return findings, usage, write_report(ctx.cfg.app_dir, findings, usage, attention, waits)

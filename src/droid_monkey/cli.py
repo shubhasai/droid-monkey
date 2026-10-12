@@ -778,9 +778,12 @@ def ux(app_dir: Path, apply: bool, agent: str, model: str, review_model: str) ->
         findings, usage, report = ux_mod.run_audit(
             ctx, smap, load_flows(ctx.cfg.app_dir), analysis_md.read_text() if analysis_md.exists() else "",
             review_model=review_model)
-    theme.header(f"{len(findings)} findings", "(>.<)")
+    seen = [f for f in findings if f.observed]
+    theme.header(f"{len(seen)} findings on screens, {len(findings) - len(seen)} suspected in code", "(>.<)")
     for f in findings:
-        click.echo(f"  {f.severity:6} {f.kind:13} {f.title}")
+        click.echo(f"  {f.severity:6} {f.kind:13} {f.title}"
+                   + ("" if f.observed else style("  (suspected in code, not observed)", fg="bright_black")))
+    theme.path_line("heatmaps", paths.data_dir(ctx.cfg.app_dir) / "ux-audit.html")
     theme.kv("cost", f"{usage['input_tokens']:,} in / {usage['output_tokens']:,} out tokens, ${(usage['cost_usd'] or 0):.3f}")
     if apply and findings:
         theme.header("your call, one finding at a time", "(o.o)")
@@ -790,7 +793,7 @@ def ux(app_dir: Path, apply: bool, agent: str, model: str, review_model: str) ->
         git.start_run_branch(ctx.cfg.app_dir, branch, ctx.cfg.module)
         auto = False
         try:
-            for f in findings:
+            for f in [x for x in findings if x.observed]:  # suspicions from code are for the attacks
                 answer = "yes" if auto else ask(f)
                 if answer == "all":
                     auto, answer = True, "yes"
