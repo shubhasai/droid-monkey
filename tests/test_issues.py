@@ -101,3 +101,16 @@ def test_fix_run_page_shows_branch_and_pr(tmp_path):
     assert info["fixed"] == 1 and not info["live"] and info["outcomes"] == [("Negative money", "fixed")]
     page = live.page_run(root, tmp_path, fx.name)
     assert "droid-monkey/fix-abc" in page and "prbtn" in page and "re-walked" in page and "running" not in page
+
+
+def test_a_fix_can_close_the_same_bug_reported_twice(tmp_path):
+    root = _root(tmp_path)
+    fx = root / "runs" / "fix-2"
+    fx.mkdir()
+    (fx / "fix.json").write_text(json.dumps({"key": "label_heart", "source": "ux", "title": "Label the heart",
+                                             "status": "fixed", "branch": "droid-monkey/fix-ux", "commit": "e1272a4",
+                                             "also_fixed": [{"source": "hunt", "key": "ph:dispatch", "title": "%d"}]}))
+    found = {x.source: x for x in issues.collect(root)}
+    assert found["ux"].status == found["hunt"].status == "fixed"
+    assert found["hunt"].branch == "droid-monkey/fix-ux" and found["hunt"].fixed_with == "Label the heart"
+    assert found["attack"].status == "open"

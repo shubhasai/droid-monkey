@@ -49,6 +49,7 @@ class Issue:
     branch: str = ""            # the fix's branch, when fixed
     commit: str = ""
     fix_run: str = ""           # the run that fixed it: `pr <fix_run>` opens its pull request
+    fixed_with: str = ""        # fixed by another issue's fix (the same bug, reported twice)
     seen_after_fix: bool = False  # a later run still saw it: the fix is only on its branch until merged
     score: float = 0.0
     rank_reason: str = ""
@@ -88,8 +89,10 @@ def collect(root: Path) -> list[Issue]:
         if done.exists():
             f = json.loads(done.read_text())
             if f.get("status") == "fixed":
-                fixes[f"{f.get('source')}:{f.get('key')}"] = {"branch": f.get("branch", ""), "commit": f.get("commit", ""),
-                                                              "run": run.name, "at": when}
+                fx = {"branch": f.get("branch", ""), "commit": f.get("commit", ""), "run": run.name, "at": when}
+                fixes[f"{f.get('source')}:{f.get('key')}"] = fx
+                for o in f.get("also_fixed", []):  # the same bug, reported by another source: gone after this fix too
+                    fixes[f"{o.get('source')}:{o.get('key')}"] = {**fx, "with": f.get("title", "")}
         hunt = run / "issues.json"
         if hunt.exists():
             for x in json.loads(hunt.read_text()).get("issues", []):
@@ -139,6 +142,7 @@ def collect(root: Path) -> list[Issue]:
         if not x:
             continue
         x.status, x.branch, x.commit, x.fix_run = "fixed", fx["branch"], fx["commit"], fx["run"]
+        x.fixed_with = fx.get("with", "")
         x.seen_after_fix = seen_at.get(k, 0) > fx["at"] and x.source != "ux"
         found[k] = x
     return list(found.values())

@@ -1046,4 +1046,6 @@ def fix_cmd(issue_id: str, app_dir: Path, agent: str | None, model: str | None) 
                          type=click.Choice(["y", "n", "yes", "no"], case_sensitive=False))
         return "yes" if a.lower().startswith("y") else "no"
 
-    click.echo(fixer.fix(ctx, x, backend, chosen, ask))
+    others = [i for i in ranked if i.source == "hunt" and i.status != "fixed" and i.id != x.id and i.screen
+              and i.screen == x.screen]
+    click.echo(fixer.fix(ctx, x, backend, chosen, ask, others))

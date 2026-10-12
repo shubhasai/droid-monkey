@@ -322,8 +322,9 @@ def page_run(root: Path, app: Path, run_id: str) -> str:
         except Exception:
             pass
     head = (f'<header class="top"><p class="eyebrow"><a href="/runs">Runs</a> / {esc(info["kind"])}</p>'
-            f'<h1><code>{esc(run_id)}</code></h1><p class="meta">{esc(info["when"])} · {info["attacks"]} attacks · '
-            f'{info["broke"]} broke' + (f' · {info["fixed"]} fixed' if info["fixed"] else "")
+            f'<h1><code>{esc(run_id)}</code></h1><p class="meta">{esc(info["when"])} · '
+            + (f'{info["attacks"]} journeys · {info["broke"]} issues' if info.get("hunt") else
+               f'{info["attacks"]} attacks · {info["broke"]} broke') + (f' · {info["fixed"]} fixed' if info["fixed"] else "")
             + (' · <span class="livebadge">running</span>' if info["live"] else "") + '</p></header>')
     extras = "".join(f'<a class="btn" href="{_f(f"runs/{run_id}/{n}")}">{n}</a>'
                      for n in ("receipt.md", "log.txt", "summary.json", "results.json") if (run / n).exists())
@@ -384,7 +385,11 @@ def _fix_body(run: Path, root: Path, f: dict) -> str:
         rows.append(("Files", " ".join(f"<code>{esc(x)}</code>" for x in f["files"])))
     table = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
     note = f'<section class="panel"><h2>The coding agent</h2><p>{esc(f["agent_note"])}</p></section>' if f.get("agent_note") else ""
-    pr = _pr_bar(run.name, f["branch"], "this fix, committed and checked on the device") if f.get("commit") else ""
+    checked = "checked on the device" if "device" in f.get("check", "") else "built (not re-checked on the device)"
+    pr = _pr_bar(run.name, f["branch"], f"this fix, committed and {checked}") if f.get("commit") else ""
+    if f.get("also_fixed"):
+        rows.append(("Also fixes", "; ".join(esc(o.get("title", "")) for o in f["also_fixed"])
+                     + ' <span class="hint">(re-walked on the device: gone)</span>'))
     return (pr + f'<section class="panel"><div class="scroll"><table class="kv">{table}</table></div></section>{note}'
             f'<div class="two"><section class="panel"><h2>Steps from launch</h2><ol>{steps}</ol></section>'
             f'<div class="shots">{img}</div></div>')
@@ -722,6 +727,7 @@ def page_issues(root: Path, app: Path, jobs=None) -> str:
             fixed_line = (f'<p class="fixedon">{_chip("fixed")} on <code>{esc(x.branch)}</code>'
                           + (f' · commit <code>{esc(x.commit[:8])}</code>' if x.commit else "")
                           + f' · <a href="/run/{quote(x.fix_run)}">the fix</a>'
+                          + (f' (together with “{esc(x.fixed_with[:60])}”)' if x.fixed_with else "")
                           + (' · <b>a later run still saw it</b>: the fix is only on that branch until you merge it' if x.seen_after_fix else "")
                           + '</p>')
             action = (f'<button type="button" class="run prbtn" data-run="{esc(x.fix_run)}"{" disabled" if busy else ""}>Open PR</button>'

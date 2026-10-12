@@ -49,10 +49,10 @@ def explain(x: Issue) -> str:
     return "\n".join(lines)
 
 
-def still_there(ctx: Context, x: Issue) -> bool | None:
+def still_there(ctx: Context, x: Issue, folder: str = "recheck") -> bool | None:
     """Re-walk a hunt issue's steps from a clean launch and run the same detectors. None: could not check."""
     from . import hunt
-    d = AppDriver(ctx, ctx.run_dir / "recheck")
+    d = AppDriver(ctx, ctx.run_dir / folder)
     try:
         d.fresh(clear_data=True)
         for step in x.steps:
@@ -80,7 +80,9 @@ def _record(ctx: Context, x: Issue, status: str, message: str, started: float, *
     return message
 
 
-def fix(ctx: Context, x: Issue, agent: str, model: str | None, ask) -> str:
+def fix(ctx: Context, x: Issue, agent: str, model: str | None, ask, others: list[Issue] | None = None) -> str:
+    """`others`: open hunt issues on the same screen. After the fix they are re-walked too, and the ones that are gone
+    are recorded as fixed by the same commit (one bug is often reported by the hunt and the UX audit both)."""
     cfg = ctx.cfg
     started = time.time()
     if x.source == "attack":
@@ -128,13 +130,23 @@ def fix(ctx: Context, x: Issue, agent: str, model: str | None, ask) -> str:
         if gone is True:
             return give_up("the issue is still there after the fix (re-walked its steps on the device)")
         check = "re-walked on the device: gone" if gone is False else "built (re-check needs the model: see the screenshot)"
+    also = []
+    for o in others or []:
+        if o.id != x.id and o.steps and still_there(ctx, o, f"recheck-{o.id}") is False:
+            also.append(o)
+    if also:
+        click.echo("  also gone after this fix (re-walked on the device): " + "; ".join(o.title for o in also))
+        if check == "built":
+            check = "built; re-walked on the device: the same bug's hunt issue is gone"
     try:
         ctx.device.restore()
     except AdbError:
         pass
     sha, checkpoint = git.commit(cfg.app_dir, keep, f"fix: {x.title}\n\n{x.detail}\n\nFound by droid-monkey ({x.source}); "
-                                                    f"check: {check}.")
+                                                    f"check: {check}."
+                                                    + "".join(f"\nAlso fixes: {o.title} (re-walked on the device: gone)" for o in also))
     git.checkout(cfg.app_dir, home)
     return _record(ctx, x, "fixed", f"fixed on {branch}: commit {sha[:8]}" + (f", Entire checkpoint {checkpoint}" if checkpoint else "")
                    + f" ({check}). Back on {home}; review the branch or open a PR.", started,
-                   branch=branch, commit=sha, checkpoint=checkpoint, check=check, files=keep, agent_note=res.text[:1500])
+                   branch=branch, commit=sha, checkpoint=checkpoint, check=check, files=keep, agent_note=res.text[:1500],
+                   also_fixed=[{"source": o.source, "key": o.key, "title": o.title} for o in also])
