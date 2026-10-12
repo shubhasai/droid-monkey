@@ -86,3 +86,33 @@ def test_commands_page_offers_attacks_to_pick(tmp_path):
     (root / "attacks" / "flow_x.yaml").write_text("name: flow_x\n")
     page = live.page_commands(root, app, None)
     assert "Built-in: rotation" in page and "Saved: flow_x" in page and 'SUGGESTED="analyze"' in page
+
+
+def test_device_screen_needs_the_token_and_reports_no_device(tmp_path, monkeypatch):
+    app, root = _folder(tmp_path)
+    frame = {"jpg": b"\xff\xd8jpeg", "why": ""}
+    monkeypatch.setattr(live, "device_frame", lambda: (frame["jpg"], frame["why"]))
+    handler = type("H", (live._Handler,), {"root": root, "app": app, "token": "tok"})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        r = urllib.request.urlopen(base + "/api/screen?t=tok")
+        assert r.headers["Content-Type"] == "image/jpeg" and r.read() == b"\xff\xd8jpeg"
+        for bad in ("/api/screen", "/api/screen?t=nope"):
+            try:
+                urllib.request.urlopen(base + bad)
+                raise AssertionError(bad)
+            except urllib.error.HTTPError as e:
+                assert e.code == 403
+        frame.update(jpg=None, why="no emulator is running")
+        try:
+            urllib.request.urlopen(base + "/api/screen?t=tok")
+            raise AssertionError("no device")
+        except urllib.error.HTTPError as e:
+            assert e.code == 503 and b"no emulator" in e.read()
+        assert "Device" in urllib.request.urlopen(base + "/device").read().decode()
+        now = json.load(urllib.request.urlopen(base + "/api/now"))
+        assert now["kind"] == "run" and now["title"] == "attack-20261012-101010" and "verdict.json" in now["tail"]
+    finally:
+        httpd.shutdown()

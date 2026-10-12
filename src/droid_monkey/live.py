@@ -627,7 +627,7 @@ def page_job(root: Path, app: Path, job_id: str, jobs=None) -> str:
   <input id="free" placeholder="or type an answer"><button type="button" id="send">Send</button></div></div>
 <div class="console-bar"><label><input type="checkbox" id="follow" checked> follow output</label>
 <button type="button" id="stop" class="stopbtn"{"" if job.status in ("running", "waiting") else " hidden"}>Stop</button></div>
-<pre class="console" id="console"></pre>
+<div class="joblayout"><pre class="console" id="console"></pre>""" + _phone() + f"""</div>
 <script>const JOB={json.dumps(job.id)};const NO_RELOAD=true;</script>"""
 
 
@@ -671,7 +671,74 @@ most harmful first. Jev (TypeSafe) scores each one: expected impact on users × 
 <div class="issues">{''.join(rows) or '<p class="hint">No open issues. Run Find bugs or Attack first.</p>'}</div>"""
 
 
-PAGES = {"/": ("Overview", page_overview), "/issues": ("Issues", page_issues), "/commands": ("Commands", page_commands), "/runs": ("Runs", page_runs), "/screens": ("Screens", page_screens),
+# ---- the device, live ----------------------------------------------------------------------------------
+
+SCREEN_GAP = 0.3  # seconds: several open tabs share one capture instead of each running screencap
+_screen_lock = threading.Lock()
+_screen: dict = {"at": 0.0, "jpg": None, "serial": None}
+
+
+def device_frame(width: int = 460) -> tuple[bytes | None, str]:
+    """The emulator's screen now, as a small JPEG; (None, why) when there is no device. A screencap is read-only:
+    it does not touch the app or the run that is driving it."""
+    import io
+    from PIL import Image
+    from .tools import emulator
+    from .tools.adb import Adb, AdbError
+    with _screen_lock:
+        if _screen["jpg"] and time.time() - _screen["at"] < SCREEN_GAP:
+            return _screen["jpg"], ""
+        try:
+            if not _screen["serial"]:
+                _screen["serial"] = emulator.running_emulator()
+            if not _screen["serial"]:
+                return None, "no emulator is running"
+            png = Adb(_screen["serial"]).run_bytes("exec-out", "screencap", "-p", timeout=8, retries=0)
+            img = Image.open(io.BytesIO(png)).convert("RGB")
+        except (AdbError, OSError, ValueError) as e:
+            _screen["serial"] = None  # the emulator may have restarted: look again next time
+            return None, f"could not read the screen: {str(e)[:160]}"
+        if img.width > width:
+            img = img.resize((width, round(img.height * width / img.width)))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=72)
+        _screen.update(at=time.time(), jpg=buf.getvalue())
+        return _screen["jpg"], ""
+
+
+def activity_now(root: Path, jobs=None) -> dict:
+    """What droid-monkey is doing: a dashboard job's latest output, or else (a run started in a terminal) the run
+    folder written most recently and the newest files in it."""
+    busy = jobs.busy() if jobs else None
+    if busy:
+        tail = "\n".join(jobs.log(busy.id).splitlines()[-40:])
+        return {"kind": "job", "title": "droid-monkey " + " ".join(busy.args), "href": f"/job/{busy.id}",
+                "status": busy.status, "tail": tail}
+    d = root / "runs"
+    run = max((r for r in d.iterdir() if r.is_dir()), key=lambda r: r.stat().st_mtime, default=None) if d.exists() else None
+    if not run:
+        return {"kind": "none"}
+    files = sorted((p for p in run.rglob("*") if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
+    age = time.time() - (files[0].stat().st_mtime if files else run.stat().st_mtime)
+    return {"kind": "run", "title": run.name, "href": f"/run/{run.name}", "status": "writing" if age < 60 else "idle",
+            "age": round(age), "tail": "\n".join(str(p.relative_to(run)) for p in files[:12])}
+
+
+def page_device(root: Path, app: Path, jobs=None) -> str:
+    return """<header class="top"><h1>Device</h1><p class="meta">The emulator's screen, live, next to what droid-monkey is
+doing: a run you started here or in a terminal. Watching only reads the screen; it never taps or types.</p></header>
+<div class="devlayout">""" + _phone() + """<section class="panel now"><div class="panel-head"><h2>Now</h2>
+<span id="nowstatus"></span></div><p class="nowtitle"><a id="nowlink" href="#"></a></p>
+<pre class="console nowtail" id="nowtail">Looking…</pre></section></div><script>const NO_RELOAD=true;const NOW_POLL=true;</script>"""
+
+
+def _phone() -> str:
+    return """<figure class="phone" data-live><div class="bezel"><img alt="The emulator's screen, live" hidden>
+<p class="offline">Connecting to the emulator…</p></div>
+<figcaption><span class="dot"></span><span class="fps">live</span><button type="button" class="pausebtn">Pause</button></figcaption></figure>"""
+
+
+PAGES = {"/": ("Overview", page_overview), "/issues": ("Issues", page_issues), "/commands": ("Commands", page_commands), "/device": ("Device", page_device), "/runs": ("Runs", page_runs), "/screens": ("Screens", page_screens),
          "/analysis": ("Analysis", page_analysis), "/flows": ("Flows", page_flows),
          "/attacks": ("Attacks", page_attacks), "/ux": ("UX audit", page_ux), "/files": ("Files", page_files)}
 
@@ -729,6 +796,13 @@ class _Handler(BaseHTTPRequestHandler):
                 if not target:
                     return self._send(404, b"not found", "text/plain")
                 return self._send(200, thumbnail(target), "image/jpeg")
+            if path == "/api/screen":
+                if not self._token_ok():
+                    return self._send(403, b"forbidden", "text/plain")
+                jpg, why = device_frame()
+                return self._send(200, jpg, "image/jpeg") if jpg else self._send(503, why.encode(), "text/plain")
+            if path == "/api/now":
+                return self._send(200, json.dumps(activity_now(self.root, self.jobs)).encode(), "application/json")
             if path.startswith("/api/jobs/"):
                 return self._job_poll(path[len("/api/jobs/"):].strip("/"))
             if path.startswith("/run/"):
@@ -737,6 +811,8 @@ class _Handler(BaseHTTPRequestHandler):
                 body, title = page_job(self.root, self.app, path[len("/job/"):].strip("/"), self.jobs), "Job"
             elif path == "/commands":
                 body, title = page_commands(self.root, self.app, self.jobs), "Commands"
+            elif path == "/device":
+                body, title = page_device(self.root, self.app, self.jobs), "Device"
             elif path == "/issues":
                 body, title = page_issues(self.root, self.app, self.jobs), "Issues"
             elif path in PAGES:
@@ -751,6 +827,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(500, f"<pre>{esc(repr(e))}</pre>".encode(), "text/html")
 
     # ---- commands -----------------------------------------------------------------------------------------
+    def _token_ok(self) -> bool:
+        """The screen is only for this dashboard's pages (an <img> carries the token in its URL) on our own host."""
+        port = self.server.server_address[1]
+        q = dict(x.split("=", 1) for x in (urlparse(self.path).query or "").split("&") if "=" in x)
+        return (hmac.compare_digest(q.get("t", ""), self.token)
+                and self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"})
+
     def _trusted(self) -> bool:
         """A request from this dashboard's own pages: the per-server token, from our own origin, to our own host
         name (which also defeats DNS rebinding)."""
@@ -961,6 +1044,17 @@ button.run:disabled{opacity:.45;cursor:not-allowed}
 .jobpill b{margin-left:auto;font:600 11px var(--body);color:var(--accent)}
 .spin{width:10px;height:10px;border-radius:50%;border:2px solid var(--accent);border-right-color:transparent;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.joblayout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
+.devlayout{display:grid;grid-template-columns:minmax(260px,380px) minmax(0,1fr);gap:20px;align-items:start}
+.phone{margin:0;display:grid;gap:8px;position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px)}
+.bezel{background:#0b0f14;border-radius:26px;padding:10px;border:1px solid var(--line);aspect-ratio:9/19.5;display:grid;place-items:center;overflow:hidden}
+.bezel img{width:100%;height:100%;object-fit:contain;border-radius:16px;display:block}
+.offline{color:#93a0af;font-size:13px;text-align:center;padding:16px;margin:0}
+.phone figcaption{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.phone .dot{width:8px;height:8px;border-radius:50%;background:var(--idle)}.phone.on .dot{background:var(--bad);animation:blink 1.2s infinite}
+.pausebtn{margin-left:auto;font:12px var(--body);background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:3px 10px;cursor:pointer}
+.nowtitle{margin:0;font:13px var(--mono)}.nowtail{height:auto;min-height:200px;max-height:calc(100vh - 260px)}
+@media (max-width:1000px){.joblayout,.devlayout{grid-template-columns:minmax(0,1fr)}.phone{position:static;max-width:320px}}
 .console-bar{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
 .console{height:calc(100vh - 290px);min-height:360px;overflow:auto;background:#0b0f14;color:#d6dde6;border-radius:10px;padding:14px 16px;font:12.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word}
 .stopbtn{font:600 13px var(--body);color:var(--bad);border:1px solid var(--bad);background:none;border-radius:7px;padding:5px 14px;cursor:pointer}
@@ -1003,6 +1097,35 @@ async function check(){
   catch(e){sync.classList.add('stale');syncText.textContent='server stopped'}
   setTimeout(check,""" + str(POLL_MS) + """)}
 setTimeout(check,""" + str(POLL_MS) + """);
+// The device, live: fetch the next frame when the last one has arrived; stop while the tab is hidden or paused.
+document.querySelectorAll('.phone[data-live]').forEach(ph=>{
+  const img=ph.querySelector('img'),off=ph.querySelector('.offline'),fps=ph.querySelector('.fps'),pb=ph.querySelector('.pausebtn');
+  let paused=false,frames=0,since=Date.now(),timer=null;
+  function next(delay){clearTimeout(timer);timer=setTimeout(grab,delay)}
+  async function grab(){
+    if(paused||document.hidden)return;
+    try{const r=await fetch('/api/screen?t='+encodeURIComponent(TOKEN),{cache:'no-store'});
+      if(!r.ok){off.textContent=await r.text();off.hidden=false;img.hidden=true;ph.classList.remove('on');fps.textContent='offline';return next(3000)}
+      const url=URL.createObjectURL(await r.blob()),old=img.src;img.src=url;img.hidden=false;off.hidden=true;ph.classList.add('on');
+      if(old.startsWith('blob:'))setTimeout(()=>URL.revokeObjectURL(old),1000);
+      frames++;const s=(Date.now()-since)/1000;if(s>=2){fps.textContent='live · '+(frames/s).toFixed(1)+' fps';frames=0;since=Date.now()}
+      next(120)}
+    catch(e){fps.textContent='offline';next(3000)}}
+  pb.addEventListener('click',()=>{paused=!paused;pb.textContent=paused?'Resume':'Pause';
+    if(paused){ph.classList.remove('on');fps.textContent='paused'}else grab()});
+  img.addEventListener('click',()=>{boxImg.src=img.src;box.hidden=false});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)grab()});
+  grab()});
+if(typeof NOW_POLL!=='undefined'){
+  const t=document.getElementById('nowtail'),l=document.getElementById('nowlink'),s=document.getElementById('nowstatus');
+  async function now(){try{const d=await (await fetch('/api/now',{cache:'no-store'})).json();
+    if(d.kind==='none'){l.textContent='';t.textContent='Nothing has run yet. Start one from Commands or a terminal.'}
+    else{l.textContent=d.title;l.href=d.href;s.innerHTML='<span class="chip c-'+(d.status==='idle'?'idle':'ok')+'">'+
+      (d.kind==='run'?(d.status==='idle'?'last run · idle':'run writing · '+d.age+' s ago'):d.status)+'</span>';
+      const atEnd=t.scrollTop+t.clientHeight>=t.scrollHeight-8;
+      t.textContent=d.kind==='run'?'Newest files:\\n'+d.tail:d.tail;if(atEnd)t.scrollTop=t.scrollHeight}}catch(e){}
+    setTimeout(now,1500)}
+  now()}
 const box=document.querySelector('.lightbox'),boxImg=box.querySelector('img');
 box.addEventListener('click',e=>{if(e.target!==boxImg)box.hidden=true});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')box.hidden=true});
