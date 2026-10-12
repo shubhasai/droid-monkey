@@ -1,0 +1,6 @@
+<pasted_content id="c2f4">
+create a dashboard that is always synced with the .droid-mokey folder
+all runs
+screen shots
+analysys everything in that folder should be connected to the dashboard
+</pasted_content id="c2f4">
