@@ -186,13 +186,32 @@ No false alarms on either app as it is.
 ## Tracing and checkpoints
 
 - **neatlogs:** every run is one trace. It covers every graph node and every model and tool call, and each `claude -p` session is an LLM span with its exact tokens and cost. The app is the "end user" and the run id is the session.
-- **neatlogs incidents:** neatlogs reads the traces and raises incidents when droid-monkey itself misbehaves. Each one was traced to its cause, fixed, and given a test:
-
-  | Incident | What the trace showed | Cause in droid-monkey | Fix |
-  |---|---|---|---|
-  | Explorer returns empty response without mapping screens (`981cb137`, medium) | The `explore` Claude Code session made no tool calls and ended with an empty answer and zero output tokens | An empty or errored `claude -p` result was still treated as success. `explore` never checked it, and if an older `screen-map.json` was on disk it returned that map as if this run had made it | `claude -p` results that are errors or empty (no text, no output tokens) now fail with a reason, set on the span as `claude_code.error` with ERROR status. `explore` retries once when the agent recorded no screens, then stops with the reason. A map only counts if this run wrote screens to it, so an earlier map is never passed off as new (`tests/test_empty_sessions.py`) |
-
 - **Entire:** the Claude Code session that built droid-monkey itself is attached to this repo as a checkpoint, and every fix commit droid-monkey makes in an app carries an `Entire-Checkpoint` trailer linking it to the recorded Claude Code session that wrote it. The diagnoser also uses Entire's code graph to find the symbols involved.
+
+### How neatlogs helped
+
+droid-monkey is an agent that drives other agents: Claude Code sessions for analysis, exploration, diagnosis and fixes, plus its own Claude calls for planning and decisions. Most of that work happens in separate `claude -p` processes, so droid-monkey's own logs only see what each session reports back. neatlogs puts all of it in one trace per run:
+
+- **One timeline per run.** The LangGraph nodes (plan, attack, decide, diagnose, fix, verify, commit), every API call (LangChain and Anthropic instrumentation), and every Claude Code session as an LLM span.
+- **Real cost.** Claude Code sessions carry the tokens and cost Claude Code reports. API calls are priced per call, so a run's spend is visible per step, not just as a total.
+- **Per app and per run.** The app's package is the end user and the run id is the session, so the traces for one app, or one run, are easy to find.
+
+**It caught a failure we could not see.** On 12 Oct, neatlogs raised the incident *Explorer returns empty response without mapping screens* (`981cb137`, medium). It came from one trace: the `explore` session made no tool calls, returned an empty answer and reported zero output tokens. droid-monkey's own logs showed no error for it. The only traceback in that day's job logs was an unrelated device error. The session had "succeeded" as far as droid-monkey could tell.
+
+**The trace pointed at the cause.** An empty LLM span with no tool calls meant the agent had stopped without touching the device. Following that into the code showed two gaps. First, an empty or errored `claude -p` result was treated as a success, and `explore` never checked it. Second, if an older `screen-map.json` was on disk, `explore` returned that map as if this run had made it. So a run that mapped nothing could look like a finished exploration.
+
+**The fix, and how it shows in neatlogs now:**
+- A `claude -p` result that is an error, or has no text and no output tokens, is a failure with a reason. This applies to every Claude Code session droid-monkey runs: analysis, exploration, diagnosis and fixes.
+- The reason is set on the span as `claude_code.error`, with ERROR status. A failure like this one now shows up in neatlogs as a named failure, not an empty success.
+- `explore` retries once when the agent recorded no screens, then stops and says why.
+- A map only counts if this run wrote screens to it, so an earlier map is never passed off as new.
+- `tests/test_empty_sessions.py` covers the empty and errored results, the retry, and keeping the earlier map.
+
+Every incident neatlogs raises about droid-monkey is handled the same way: read the trace, find the cause, fix it, add a test, and record it here.
+
+| Incident | What the trace showed | Cause in droid-monkey | Fix |
+|---|---|---|---|
+| Explorer returns empty response without mapping screens (`981cb137`, medium) | `explore` session: no tool calls, empty answer, zero output tokens | Empty or errored `claude -p` results counted as success; `explore` could return an older map as this run's | Empty or errored sessions fail with a reason (`claude_code.error`, ERROR status); explore retries once; only a map this run wrote counts |
 
 ## Safety
 
