@@ -38,4 +38,17 @@ The costs in [`business/drivers.csv`](../business/drivers.csv) are the same numb
 ## Links still to add (from the neatlogs app)
 
 - [ ] A trace from before and after an improvement, with the numbers compared, for example the explore incident before and after `08fdebd`.
-- [ ] A trace showing a failed fix and the recovery path (`droid-monkey run --fail-first-fix`).
+- [ ] The trace link for the recovery run below (neatlogs session `run-20261012-175601`).
+
+## A failed action and the recovery path
+
+Run `run-20261012-175601` on MonkeyMart, started with `droid-monkey run --attacks low_memory_on_detailscreen --fail-first-fix`. That flag reports the first verified fix as failed, so the recovery path runs.
+
+1. **Attack:** low memory on the detail screen. The app **crashed** with `IllegalStateException` at `DealLoader.load` (`DetailScreen.kt:68`).
+2. **Diagnose → approve (y) → fix 1:** Claude Code changed `ScreenTracker.kt` and `DetailScreen.kt` and added `ScreenTrackerTest` (38 s, $0.61).
+3. **Verify:** it passed, but `--fail-first-fix` reported it as failed. **This is the failed action.**
+4. **Decide: retry.** The failure note goes back into a **revised diagnosis**. This one found that the first fix kept the same design (the Activity's FragmentManager still used from a coroutine that waits 5 s), and proposed taking the Activity out of the load path entirely, with the deal shown in a Compose dialog.
+5. **Approve (y) → fix 2** (30 s, $0.34) → **verify: FIXED.** The replay survived and the test passed.
+6. **Commit** `bd33eafb` on `droid-monkey/run-20261012-175601`, Entire checkpoint `01M4R1HD564JVD54BT1969WD6H`. Resilience 100/100.
+
+The whole run took 5.4 min. Model spend: $0.013 API (planning, decisions, 2 diagnoses) and $0.94 in Claude Code sessions (2 fixes).
