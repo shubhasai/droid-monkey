@@ -1,0 +1,140 @@
+<pasted_content id="4122">
+Our #neatHack submission
+
+[Tell your unique story in your own words.]
+
+Built with @arithecfo @EntireHQ @neatlogs
+
+[Attach your demo video before posting.] https://x.com/bettersayAJ/status/2109639214723932495
+</pasted_content id="4122">
+
+ 
+
+this is the template
+
+---
+
+I have premium
+
+---
+
+see add something related to pain of android developer
+
+---
+
+dont write too much about android pain write about product also
+
+---
+
+also add my story I am a android developer and i faced the same
+
+---
+
+dont use much emoji looks ugly
+
+---
+
+give some android hashtags
+
+---
+
+add a line on validated via memory dump, perfetto logs, and other tools
+
+---
+
+can u check if all the links are accessible
+
+---
+
+STEP 03 / 03
+Draft saved
+One last look.
+Check your details, then make it official.
+
+
+DroidMonkey
+Edit details
+Logd · 1 builder
+
+Bengaluru, India
+
+Quote post
+Repository
+Work & roles
+Nudge, Founding Engineer
+Open to a call with neatlogs
+Yes
+cfo.ai
+cfo.ai turned the business plan into a rule the agent follows.
+
+1. Measure: droid-monkey's own `econ` command reads every run's receipt and writes the plan's inputs (business/drivers.csv), each marked measured or assumed. Attacks cost $0 in model spend; fixes are where the money goes ($0.56 per attempt, $1.12 per verified fix).
+2. Model: cfo.ai's Ari built a CI add-on plan from those numbers: Free, Team ($99) and Scale ($499) tiers plus $3 per verified fix, six 
+scenarios over 18 months.
+https://x.com/m_shubhasai/status/2109685797603680453
+https://github.com/shubhasai/droid-monkey
+can you check these are correc or not
+
+3. What it showed: the fix budget is what keeps the business profitable. With no cap, the Scale tier's margin falls to −5.6%; with the cap it is 67.1%. Covering all expected fix demand on Scale at a 70% margin takes $986.97 a month, so the plan recommends repricing Scale or keeping the cap. No scenario runs out of cash in 18 months.
+4. Enforce: the 70% margin floor sets each tier's fix budget per run. `droid-monkey run --tier team` keeps attacking once the budget is spent but stops fixing, and each check is a budget guardrail span in neatlogs.
+
+Model (public): https://cfo.ai/s/dcL7ulePdgkkZNCB
+Plan: https://github.com/shubhasai/droid-monkey/blob/main/docs/cfo-plan.md
+Evidence: https://github.com/shubhasai/droid-monkey/blob/main/evidence/cfo-ai.md
+Inputs: https://github.com/shubhasai/droid-monkey/blob/main/business/drivers.csv
+Entire
+Checkpoints: every fix droid-monkey makes is a Claude Code session in the app's repo, so each fix commit carries an Entire-Checkpoint trailer linking it to the session that wrote it. A reviewer sees the diagnosis, what the agent read and tried, and the fix, not only the diff. MonkeyMart has 35 checkpoints on GitHub (32 commits with a trailer); droid-monkey itself was built with Entire on and has 17.
+Example fix commit with its session: https://entire.io/gh/shubhasai/MonkeyMart/commit/92dfd2f264bdd7893e565a702c21f6f3859f0bf5
+PRs opened by the agent, each fix checkpointed: https://github.com/shubhasai/MonkeyMart/pull/1 · https://github.com/shubhasai/MonkeyMart/pull/3
+
+entire-graph: the diagnoser has a graph_search tool built on `entire graph search`, filtered to the app's own source files. On MonkeyMart's 6 bugs it ranked the bug's own lines in the top 3 for 4 and the right file for all 6, each search under a second. Unfiltered, Entire also ranked droid-monkey's logs and repro scripts that describe the bugs; the filter makes the diagnosis come from the code.
+https://github.com/shubhasai/droid-monkey/blob/main/evidence/entire-graph.md
+
+Open-source integration: droid-monkey (MIT) integrates the Entire CLI end to end. `init` checks the CLI and the graph plugin, the diagnoser calls the graph, every fix commit carries a checkpoint, and `droid-monkey pr` pushes the checkpoints with the branch.
+https://github.com/shubhasai/droid-monkey/blob/main/evidence/entire.md
+neatlogs
+Traced: every droid-monkey run is one neatlogs trace. It covers every LangGraph node (plan, attack, decide, diagnose, approve, fix, verify, commit), every model call priced per call, each Claude Code session as an LLM span, error spans for failed sessions, and a budget guardrail span on each check against the business plan. The app is the end user and the run is the session.
+
+Debugged: neatlogs raised an incident, "Explorer returns empty response without mapping screens": a session with no tool calls and zero output tokens that droid-monkey's own logs counted as a success. The trace showed two gaps. Empty or errored sessions passed as success, and explore could return an older screen map as new. Fixed in commit 08fdebd with tests, and such a session is now a named ERROR span. neatlogs also flagged diagnoser sessions returning nothing (13 traces), which we are investigating.
+
+Improved: the same 4 attacks on MonkeyMart compared as neatlogs sessions, from v1 (no diagnosis) to v4. v4 fixed all 4 bugs on the first try with 13% fewer coder tokens (498k against 575k). The recovery run is traced too: a failed fix, a revised diagnosis, then a fix that held.
+
+Evidence: https://github.com/shubhasai/droid-monkey/blob/main/evidence/neatlogs.md
+Screenshots: https://shubhasai.github.io/droid-monkey/#neatlogs
+
+Our quote-tweet includes the demo and all three tags. Our repo is public, links work, and this entry covers all of Logd.
+
+---
+
+you can open the tween and check
+
+---
+
+anything else missing from the requirements
+
+---
+
+Our quote-tweet includes the demo and all three tags. Our repo is public, links work, and this entry covers all of Logd. ??
+
+---
+
+https://neatlogs.com/submission
+
+---
+
+a tab opened in chrome
+
+---
+
+yes
+
+---
+
+plugin already installed
+
+---
+
+@"/Users/shubhasai/Downloads/Submit your project _ neatHack.html"
+
+---
+
+add memory and perfeto screenshots to the site
