@@ -54,7 +54,8 @@ nav .wrap{display:flex;align-items:center;gap:20px;height:58px}
 nav .links{margin-left:auto;display:flex;gap:18px;align-items:center}
 nav .links a{color:var(--muted);text-decoration:none;font-size:.92rem}
 nav .links a:hover{color:var(--fg)}
-@media (max-width:640px){nav .links a.opt{display:none}}
+nav .links a,.brand{white-space:nowrap}
+@media (max-width:980px){nav .links a.opt{display:none}}
 
 /* buttons */
 .btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--fg);background:var(--surface)}
@@ -106,11 +107,11 @@ nav .links a:hover{color:var(--fg)}
 .steps-grid p{margin:0;color:var(--muted);font-size:.95rem}
 
 /* hunt showcase */
-.show{display:grid;grid-template-columns:auto auto 1fr;gap:26px;align-items:start;margin-top:34px}
-@media (max-width:1100px){.show{grid-template-columns:auto auto;justify-content:start}.show>div:last-child{grid-column:1/-1}}
-@media (max-width:520px){.show{grid-template-columns:1fr}}
+.show{display:grid;grid-template-columns:260px 260px minmax(0,1fr);gap:28px;align-items:start;margin-top:34px}
+@media (max-width:1000px){.show{grid-template-columns:repeat(2,minmax(0,260px));justify-content:start}.show>div:last-child{grid-column:1/-1}}
+@media (max-width:600px){.show{grid-template-columns:minmax(0,1fr)}.phone{margin:0 auto}}
 figure{margin:0}
-.phone{position:relative;width:min(270px,100%);border-radius:22px;overflow:hidden;border:8px solid #1d211c;background:#fff;box-shadow:0 14px 40px -22px rgba(0,0,0,.5)}
+.phone{position:relative;width:100%;max-width:260px;border-radius:22px;overflow:hidden;border:8px solid #1d211c;background:#fff;box-shadow:0 14px 40px -22px rgba(0,0,0,.5)}
 .phone img{display:block;width:100%;height:auto}
 .hl{position:absolute;border:2.5px solid var(--bad);border-radius:6px;background:color-mix(in srgb,var(--bad) 10%,transparent)}
 .hl b{position:absolute;right:-11px;top:-11px;width:22px;height:22px;border-radius:50%;background:var(--bad);color:#fff;font:700 12px/22px var(--sans);text-align:center}
@@ -175,6 +176,42 @@ figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
 .timeline time{font:12px var(--mono);color:var(--muted);margin-right:6px}
 .spec{background:var(--term);color:var(--term-fg);border-radius:10px;padding:14px 16px;font:12.5px/1.5 var(--mono);overflow-x:auto;margin:12px 0 0;white-space:pre}
 .spec .k{color:var(--term-cyan)} .spec .v{color:var(--term-yellow)} .spec .cm{color:var(--term-dim)}
+/* sponsors */
+.sponsor{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:40px;align-items:start;margin-top:44px;padding-top:40px;border-top:1px dashed var(--line)}
+.sponsor:first-of-type{border-top:0;padding-top:0}
+.sponsor:not(:has(.shot)){grid-template-columns:minmax(0,1fr)}
+.sponsor:not(:has(.shot)) .sp-shots{display:none}
+@media (max-width:900px){.sponsor{grid-template-columns:minmax(0,1fr)}}
+.sp-name{font:600 1.25rem var(--mono);color:var(--banana-ink);margin-bottom:6px}
+.sp-name small{font-size:.75rem;color:var(--muted);font-weight:500;margin-left:6px}
+.sp-text h3{font-size:1.35rem}
+.sp-text>p{color:var(--muted);margin:0 0 12px}
+.sp-list,.sp-flow{margin:0 0 16px;padding-left:20px;color:var(--fg)}
+.sp-list li,.sp-flow li{margin:5px 0;font-size:.95rem}
+.sp-callout{border-left:4px solid var(--banana);background:var(--surface);border-radius:0 10px 10px 0;padding:14px 16px;font-size:.94rem;margin:0 0 16px}
+.sp-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 16px}
+.sp-stats div{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px}
+.sp-stats b{display:block;font-size:1.35rem;letter-spacing:-.01em}
+.sp-stats span{display:block;font-size:.8rem;color:var(--muted);line-height:1.35;margin-top:4px}
+.sp-table{width:100%;border-collapse:collapse;font-size:.88rem;margin:0 0 14px}
+.sp-table th,.sp-table td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+.sp-table th{font:600 .72rem var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.sp-table tr.bad td{color:var(--bad);font-weight:600}
+.sp-note{font-size:.92rem;color:var(--muted);margin:0 0 12px}
+.sp-more{display:inline-block;margin:4px 16px 0 0;font-weight:600;text-decoration:none}
+.sp-shots{display:grid;gap:18px}
+.shot{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.shot img{display:block;width:100%;height:auto}
+.shot figcaption{font-size:.84rem;color:var(--muted);padding:10px 14px;margin:0;max-width:none}
+@media (max-width:520px){.sp-stats{grid-template-columns:minmax(0,1fr)}}
+/* benchmarks */
+.bench-h{margin-top:44px;font-size:1.15rem}
+.bench-p{font-size:.93rem;max-width:80ch}
+.bench td:first-child{white-space:normal;min-width:150px}
+.bench small{font:400 .78rem var(--sans);color:var(--muted);text-transform:none;letter-spacing:0}
+.bench th.win,.bench td.win{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.bench tr.winrow td{background:var(--accent-soft);color:var(--accent);font-weight:600}
+@media (max-width:640px){.bench thead{display:table-header-group}.bench tr{display:table-row}.bench td{display:table-cell;padding:8px}}
 .hero-grid>*,.start>*,.show>*,.modes>*,.steps-grid>*,.cols>*,.partners>*{min-width:0}
 .install span{min-width:0}
 footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--muted);font-size:.9rem}
@@ -193,6 +230,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       <a class="opt" href="#hunt">Hunt</a>
       <a class="opt" href="#attacks">Attacks</a>
       <a class="opt" href="#proof">Results</a>
+      <a class="opt" href="#sponsors">Sponsors</a>
       <a href="https://github.com/shubhasai/droid-monkey">GitHub</a>
     </div>
   </div>
@@ -478,10 +516,42 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       <div class="stat"><div class="n vs">2 <s>14</s></div><div class="l">files changed (+55/−5, against +424/−36 of speculative hardening)</div></div>
       <div class="stat"><div class="n">1st <small>try</small></div><div class="l">fixed and verified on the device</div></div>
     </div>
-    <p class="muted" style="margin-top:22px;font-size:.92rem">Without a reproduction or a stack trace, plain Claude Code
-      read its way through the repo and changed code for faults that, on the device, don't happen. On MonkeyMart's four
-      planted bugs droid-monkey fixed all four on the first try. All results are single runs;
-      <a href="https://github.com/shubhasai/droid-monkey#results">full tables in the README</a>.</p>
+    <h3 class="bench-h">Benchmark 1 · Google's architecture-samples: one real bug, three approaches</h3>
+    <p class="muted bench-p">Same base commit. Every approach's fix was judged the same way, by droid-monkey's replay on the device.</p>
+    <div class="scroll">
+    <table class="tbl bench">
+      <thead><tr><th></th><th>Plain Claude Code<br><small>generic prompt, no droid-monkey</small></th><th>droid-monkey<br><small>no diagnosis</small></th><th class="win">droid-monkey</th></tr></thead>
+      <tbody>
+        <tr><td>Process-death bug fixed</td><td>yes</td><td>yes, first try</td><td class="win">yes, first try</td></tr>
+        <tr><td>Coder tokens</td><td>2,167,816</td><td>220,546</td><td class="win">167,297</td></tr>
+        <tr><td>Cost</td><td>$2.46</td><td>$0.43</td><td class="win">$0.39</td></tr>
+        <tr><td>Change</td><td>14 files, +424/−36, mostly speculative hardening never checked on a device</td><td>2 files, +56/−4</td><td class="win">2 files, +55/−5</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="muted bench-p">Without a reproduction or a stack trace, plain Claude Code read its way through the repo (about 13× the
+      tokens) and changed code for faults that, on the device, don't happen. droid-monkey's diagnosis pointed the coder
+      at <code>AddEditTaskViewModel.kt:59</code>.</p>
+
+    <h3 class="bench-h">Benchmark 2 · MonkeyMart: 4 planted bugs, five versions</h3>
+    <p class="muted bench-p">Same 4 attacks, same base. Each version fixed a weakness found in the previous version's run data.</p>
+    <div class="scroll">
+    <table class="tbl bench">
+      <thead><tr><th>Version</th><th>Fixed</th><th>Coder tokens</th><th>Cost</th><th>Time</th></tr></thead>
+      <tbody>
+        <tr><td>Plain Claude Code<br><small>no droid-monkey; judged by droid-monkey afterwards</small></td><td>4/4, nothing checked on a device</td><td>828k</td><td>$1.35</td><td>3.1 min</td></tr>
+        <tr><td>v1, no diagnosis</td><td>4/4</td><td>575k</td><td>$1.28</td><td>8.0 min</td></tr>
+        <tr><td>v2, + diagnosis</td><td>4/4 (1 retry)</td><td>793k</td><td>$2.09</td><td>11.4 min</td></tr>
+        <tr><td>v3, + compile tool</td><td>4/4 (1 retry)</td><td>743k</td><td>$1.78</td><td>11.1 min</td></tr>
+        <tr class="winrow"><td>v4, + JVM-first test plans</td><td>4/4, all first try</td><td>498k</td><td>$1.27</td><td>8.8 min</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="muted bench-p">To be clear about what this shows: on a small app with textbook bugs, plain Claude Code fixes
+      everything by reading code, and faster. droid-monkey's value is what reading can't do: finding which faults
+      actually break the app, reproducing them on a running device, proving each fix by replaying the identical attack,
+      and the evidence trail. Its advantage grows on bigger codebases and on bugs with no stack trace. All results are
+      single runs; <a href="https://github.com/shubhasai/droid-monkey#results">details in the README</a>.</p>
   </div>
 </section>
 
@@ -500,19 +570,113 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
   </div>
 </section>
 
-<section id="built">
+<section id="sponsors">
   <div class="wrap">
-    <div class="eyebrow">Built with</div>
-    <h2>Every run is traced, checkpointed and costed.</h2>
-    <div class="partners">
-      <div class="card"><h3>neatlogs <small>tracing</small></h3><p>One trace per run: every graph node, model call,
-        tool call and Claude Code session, with exact tokens and cost per step.</p></div>
-      <div class="card"><h3>Entire <small>checkpoints</small></h3><p>Every fix commit carries an Entire-Checkpoint
-        linking it to the session that wrote it. The diagnoser searches Entire's code graph.</p></div>
-      <div class="card"><h3>cfo.ai <small>business plan</small></h3><p>A CI add-on plan built from droid-monkey's
-        measured costs. The plan sets each tier's fix budget, and <code>run --tier</code> enforces it.</p></div>
-    </div>
-    <p class="stack">Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto</p>
+    <div class="eyebrow">Built with neatlogs, Entire and cfo.ai</div>
+    <h2>Every run is traced, every fix is signed, every dollar is planned.</h2>
+    <p class="lead">Each partner tool has a job inside droid-monkey's loop, not beside it. Full details, with the code
+      that does each part: <a href="https://github.com/shubhasai/droid-monkey/blob/main/evidence/README.md">evidence/</a>.</p>
+
+    <article class="sponsor" id="neatlogs">
+      <div class="sp-text">
+        <div class="sp-name">neatlogs <small>tracing</small></div>
+        <h3>One trace per run, with the cost of every step</h3>
+        <p>droid-monkey drives other agents: Claude Code sessions analyse, explore, diagnose and fix, each in its own
+          process. Only a trace shows the whole run and what it cost.</p>
+        <ul class="sp-list">
+          <li>Every LangGraph node (plan, attack, decide, diagnose, approve, fix, verify, commit) and every model call.</li>
+          <li>Each Claude Code session as an LLM span with its exact tokens and cost. The app is the end user; the run is the session.</li>
+          <li>A failed or empty session is an ERROR span with the reason in <code>claude_code.error</code>.</li>
+          <li>Each check against the business plan's fix budget is a <code>budget</code> GUARDRAIL span.</li>
+        </ul>
+        <div class="sp-callout"><strong>It catches failures our own logs miss.</strong> An agent session that ends
+          with no output looks like a success from the outside. neatlogs raised two incidents about exactly that:
+          <em>"Explorer returns empty response without mapping screens"</em>, which led to two fixes in droid-monkey
+          (<code>08fdebd</code>, with tests), and <em>"Diagnoser returns empty response without analyzing faults"</em>
+          in 13 traces, now under investigation.</div>
+        <div class="sp-stats">
+          <div><b>18</b><span>traces in one recovery run, failed fix to verified fix</span></div>
+          <div><b>0.0%</b><span>error rate in that run</span></div>
+          <div><b>96.4%</b><span>of its traced cost went to the coding model</span></div>
+        </div>
+        <a class="sp-more" href="https://github.com/shubhasai/droid-monkey/blob/main/evidence/neatlogs.md">How droid-monkey uses neatlogs →</a>
+      </div>
+      <div class="sp-shots">
+        <figure class="shot"><img src="assets/sponsors/neatlogs-trace.webp" alt="neatlogs analytics for the droid-monkey workflow, session run-20261012-175601: 18 traces, 31.8 s average duration, $0.3660 total cost, 0.0% error rate, cost broken down by model" width="1400" height="737" onerror="this.closest('.shot').remove()"><figcaption>The recovery run (session <code>run-20261012-175601</code>) in neatlogs: 18 traces, 0 errors, time and cost by step and model.</figcaption></figure>
+        <figure class="shot"><img src="assets/sponsors/neatlogs-tools.webp" alt="neatlogs tool performance: read_code, search_code and verify, with calls, p50 and p95 latency" width="1400" height="386" onerror="this.closest('.shot').remove()"><figcaption>The diagnoser's code tools and the device verification, timed per call.</figcaption></figure>
+        <figure class="shot"><img src="assets/sponsors/neatlogs-incident.webp" alt="neatlogs incident: Diagnoser returns empty response without analyzing faults, 13 affected traces, medium priority, investigated" width="1400" height="759" onerror="this.closest('.shot').remove()"><figcaption>An incident neatlogs raised on its own: diagnoser sessions that returned nothing, in 13 traces.</figcaption></figure>
+      </div>
+    </article>
+
+    <article class="sponsor" id="entire">
+      <div class="sp-text">
+        <div class="sp-name">Entire <small>checkpoints and code graph</small></div>
+        <h3>The session behind every fix</h3>
+        <p>A reviewer sees more than the diff: which agent session wrote each fix, and everything it read and tried.</p>
+        <ul class="sp-list">
+          <li>Every fix commit carries an <code>Entire-Checkpoint</code> trailer linking it to the Claude Code session that made it.</li>
+          <li>The diagnoser searches Entire's code graph for the symbols, callers and tests involved in a failure.</li>
+          <li><code>droid-monkey init</code> checks the Entire CLI and its graph plugin are set up.</li>
+          <li>droid-monkey itself was built with Entire on, so its own sessions are checkpointed too.</li>
+        </ul>
+        <div class="sp-stats">
+          <div><b>34</b><span>checkpoints on MonkeyMart, on GitHub</span></div>
+          <div><b>31</b><span>MonkeyMart commits with a checkpoint trailer</span></div>
+          <div><b>11</b><span>checkpoints on droid-monkey itself</span></div>
+        </div>
+        <table class="sp-table">
+          <thead><tr><th>Fix commit</th><th>What it fixed</th><th>Checkpoint</th></tr></thead>
+          <tbody>
+            <tr><td><a href="https://github.com/shubhasai/MonkeyMart/pull/3">92dfd2f</a></td><td>process death: detail screen restored from saved state</td><td><code>01M4R1WT…</code></td></tr>
+            <tr><td><a href="https://github.com/shubhasai/MonkeyMart/pull/2">709354b</a></td><td>low memory: deal load cancelled with the screen</td><td><code>01M4QVMZ…</code></td></tr>
+            <tr><td><a href="https://github.com/shubhasai/MonkeyMart/pull/1">a26df3b</a></td><td>rotation: deal popup tied to the lifecycle</td><td><code>01M4NR30…</code></td></tr>
+          </tbody>
+        </table>
+        <a class="sp-more" href="https://github.com/shubhasai/droid-monkey/blob/main/evidence/entire.md">How droid-monkey uses Entire →</a>
+      </div>
+      <div class="sp-shots">
+        <figure class="shot"><img src="assets/sponsors/entire-commit.webp" alt="entire.io page for MonkeyMart commit 92dfd2f: droid-monkey's fix for process death on the detail screen, with the diagnosis, the verification, the Entire-Checkpoint trailer, and the Claude Code Sonnet 5.5 session that wrote it" width="1400" height="962" onerror="this.closest('.shot').remove()"><figcaption>Fix commit <code>92dfd2f</code> on entire.io: droid-monkey's diagnosis and verification in the message, and the Claude Code session that wrote it (1 checkpoint, 11.6K tokens).</figcaption></figure>
+        <figure class="shot"><img src="assets/sponsors/entire-sessions.webp" alt="MonkeyMart's sessions on entire.io: Claude Code fix sessions for process death, low memory, a memory leak, checkout state loss, camera permission revoke, network loss and a rotation crash" width="1400" height="802" onerror="this.closest('.shot').remove()"><figcaption>MonkeyMart's sessions: each fix droid-monkey made is a recorded Claude Code session with its checkpoints.</figcaption></figure>
+        <figure class="shot"><img src="assets/sponsors/entire-droid-monkey.webp" alt="droid-monkey's own sessions on entire.io" width="1400" height="465" onerror="this.closest('.shot').remove()"><figcaption>And droid-monkey's own build sessions, checkpointed the same way.</figcaption></figure>
+      </div>
+    </article>
+
+    <article class="sponsor" id="cfo">
+      <div class="sp-text">
+        <div class="sp-name">cfo.ai <small>business plan</small></div>
+        <h3>The business plan sets what the agent may spend</h3>
+        <p>droid-monkey sells as a CI add-on for Android teams. The plan is built from its own measured costs, and the
+          plan in turn caps what each run may spend on fixes.</p>
+        <ol class="sp-flow">
+          <li><b>Measure:</b> <code>droid-monkey econ</code> reads every run's receipt (the same costs as the neatlogs spans) into <code>drivers.csv</code>.</li>
+          <li><b>Model:</b> cfo.ai's Ari builds three plans and six scenarios over 18 months.</li>
+          <li><b>Enforce:</b> the 70% margin floor sets each tier's fix budget; <code>run --tier</code> keeps attacking but stops fixing once it's spent.</li>
+        </ol>
+        <div class="sp-stats">
+          <div><b>$0</b><span>model spend per attack (31 s each)</span></div>
+          <div><b>$0.56</b><span>per fix attempt</span></div>
+          <div><b>$1.12</b><span>per verified fix</span></div>
+        </div>
+        <table class="sp-table">
+          <thead><tr><th>Scenario</th><th>Scale margin</th><th>Team margin</th><th>Month-18 cash</th></tr></thead>
+          <tbody>
+            <tr><td>Base</td><td>67.1%</td><td>69.8%</td><td>$22,618</td></tr>
+            <tr class="bad"><td>No budget cap</td><td>−5.6%</td><td>45.0%</td><td>$10,852</td></tr>
+            <tr><td>Scale repriced ($986.97)</td><td>70.0%</td><td>69.8%</td><td>$29,732</td></tr>
+            <tr><td>Usage pricing ($3 per verified fix)</td><td>74.0%</td><td>80.7%</td><td>$44,764</td></tr>
+          </tbody>
+        </table>
+        <p class="sp-note">The fix budget is what keeps droid-monkey profitable: without it, the Scale plan loses money on every run.</p>
+        <a class="sp-more" href="https://cfo.ai/s/dcL7ulePdgkkZNCB">The model on cfo.ai →</a>
+        <a class="sp-more" href="https://github.com/shubhasai/droid-monkey/blob/main/docs/cfo-plan.md">The full plan →</a>
+      </div>
+      <div class="sp-shots">
+        <figure class="shot"><img src="assets/sponsors/cfo-model.webp" alt="droid-monkey economics in cfo.ai: keep the cap or change Scale pricing. Month 18 MRR $3,811.64, month 18 cash $22,617.91, Scale recurring margin 67.1%" width="1170" height="512" onerror="this.closest('.shot').remove()"><figcaption>The model's conclusion in cfo.ai: keep the fix cap, or reprice Scale to $986.97.</figcaption></figure>
+        <figure class="shot"><img src="assets/sponsors/cfo-scenarios.webp" alt="cfo.ai scenario tables: base against bad release month, no budget cap and Scale repriced; plan margins per scenario, Scale at -5.64% with no budget cap" width="1155" height="672" onerror="this.closest('.shot').remove()"><figcaption>The scenarios side by side: with no fix budget, Scale's margin drops to −5.64%.</figcaption></figure>
+      </div>
+    </article>
+
+    <p class="stack">Also: Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto</p>
   </div>
 </section>
 
