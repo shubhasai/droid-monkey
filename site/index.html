@@ -212,6 +212,13 @@ figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
 .bench th.win,.bench td.win{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .bench tr.winrow td{background:var(--accent-soft);color:var(--accent);font-weight:600}
 @media (max-width:640px){.bench thead{display:table-header-group}.bench tr{display:table-row}.bench td{display:table-cell;padding:8px}}
+/* features */
+.feat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:30px}
+@media (max-width:760px){.feat-grid{grid-template-columns:minmax(0,1fr)}}
+.feat ul{list-style:none;padding:0;margin:12px 0 0;color:var(--fg)}
+.feat li{position:relative;padding-left:16px;margin:8px 0;font-size:.94rem;line-height:1.5}
+.feat li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--banana)}
+.feat li b{font-weight:600}
 .hero-grid>*,.start>*,.show>*,.modes>*,.steps-grid>*,.cols>*,.partners>*{min-width:0}
 .install span{min-width:0}
 footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--muted);font-size:.9rem}
@@ -226,6 +233,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
     <a class="brand" href="#"><span>(o.o)</span><span>droid-<b>monkey</b></span></a>
     <div class="links">
       <a class="opt" href="#how">How it works</a>
+      <a class="opt" href="#features">Features</a>
       <a class="opt" href="#watch">Watch</a>
       <a class="opt" href="#hunt">Hunt</a>
       <a class="opt" href="#attacks">Attacks</a>
@@ -471,6 +479,64 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       <div class="card"><h3>verify + commit</h3><p>Rebuild, replay the <strong>identical</strong> attack, run the new
         test. Committed only if both pass, one commit per fix with an Entire checkpoint, on its own branch.</p></div>
     </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow">Features</div>
+    <h2>Everything droid-monkey does, end to end.</h2>
+    <p class="lead">One CLI, from reading your code to a verified commit, with a live dashboard over all of it.</p>
+    <div class="feat-grid">
+      <div class="card feat">
+        <div class="face">(o.o)</div>
+        <h3>Understand the app</h3>
+        <ul>
+          <li><b>Any Android app.</b> <code>init</code> detects the module, package, variant, emulator and JDK.</li>
+          <li><b>Code analysis:</b> manifest, permissions and 10 risk patterns with file:line, plus the user flows worth testing.</li>
+          <li><b>Screen map:</b> an agent drives the app from a checklist of every screen in the code; each gets a replayable path and its source files.</li>
+          <li><b>Four explore modes:</b> agent, fast (no model), manual (you drive) and rules.</li>
+          <li><b>Signed-in apps</b> through a test account.</li>
+        </ul>
+      </div>
+      <div class="card feat">
+        <div class="face">(x_x)</div>
+        <h3>Find what breaks</h3>
+        <ul>
+          <li><b>7 built-in attacks:</b> process death, rotation, network loss, permission revoke, low memory, CPU load, slow startup.</li>
+          <li><b>App-specific attacks</b> from your user flows, designed by an agent, or described in plain words.</li>
+          <li><b>Hunt:</b> bugs in normal use, from the app's logs, every screen, and a model reading each journey.</li>
+          <li><b>UX audit:</b> touch targets, labels, attention heatmaps, measured waits.</li>
+          <li><b>One ranked list</b> of every issue, by user impact.</li>
+          <li><b>Deep evidence:</b> Perfetto traces, ANR stacks, leak chains from Shark, screen recordings.</li>
+        </ul>
+      </div>
+      <div class="card feat">
+        <div class="face">(^o^)</div>
+        <h3>Fix it, and prove it</h3>
+        <ul>
+          <li><b>Root-cause diagnosis</b> with file:line evidence, Entire's code graph and SQL over the trace.</li>
+          <li><b>Your yes first:</b> every fix shows the evidence and waits.</li>
+          <li><b>Three coding agents:</b> Claude Code, Codex or the API agent. Sources only, no shell.</li>
+          <li><b>Proof on the device:</b> the identical attack replayed plus a new test, or it isn't committed.</li>
+          <li><b>Recovery:</b> revised diagnosis and retry, clean rollback, emulator watchdog, resume after a crash.</li>
+          <li><b>One commit per fix</b> with an Entire checkpoint, and a PR with the evidence.</li>
+        </ul>
+      </div>
+      <div class="card feat">
+        <div class="face">(^.^)</div>
+        <h3>See and share the results</h3>
+        <ul>
+          <li><b>Live dashboard:</b> every run, screen and issue; stream the emulator and run any command from the page.</li>
+          <li><b>Reports:</b> recordings, charts, a score card and a receipt with time, tokens and cost per step.</li>
+          <li><b>Tracing:</b> every run is one neatlogs trace.</li>
+          <li><b>Cost control:</b> measured costs feed the cfo.ai plan, and <code>run --tier</code> enforces its fix budget.</li>
+          <li><b>A CLI with character:</b> ASCII monkeys for every result, and a banana meter.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:22px;font-size:.92rem">The full list, with every command and option, is in the
+      <a href="https://github.com/shubhasai/droid-monkey#features">README</a>.</p>
   </div>
 </section>
 
