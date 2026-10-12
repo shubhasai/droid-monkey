@@ -1012,7 +1012,14 @@ def serve(app_dir: Path, port: int = 8787, open_browser: bool = True) -> None:
     root = paths.data_dir(app_dir)
     handler = type("Handler", (_Handler,), {"root": root, "app": app_dir.resolve(), "jobs": Jobs(app_dir),
                                             "token": secrets.token_urlsafe(24)})
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    except OSError as e:
+        if e.errno != 48 and "in use" not in str(e):
+            raise
+        import click
+        raise click.ClickException(f"port {port} is already in use, probably by a dashboard that is still running: "
+                                   f"stop it (Ctrl+C in its terminal), or start this one with --port {port + 1}")
     url = f"http://127.0.0.1:{port}/"
     print(f"droid-monkey dashboard for {root.resolve()}\n  {url}  (live: it follows the folder; Ctrl+C to stop)", flush=True)
     if open_browser:
