@@ -247,9 +247,10 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
 
 @main.command()
 @APP_DIR
-@click.option("--mode", type=click.Choice(["agent", "claude", "jev", "rules"]), default="agent", show_default=True,
+@click.option("--mode", type=click.Choice(["agent", "claude", "jev", "manual", "rules"]), default="agent", show_default=True,
               help="agent: the coding agent reads the code and drives the app (screens + files). jev: fast, "
                    "TypeSafe's Jev ranks each screen's elements toward the analysed flows (needs TYPESAFE_API_KEY). "
+                   "manual: you drive the app on the emulator and droid-monkey records the screens and paths. "
                    "rules: free tap-everything exploration without a model. (claude is the old name for agent.)")
 @click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for agent mode.")
 @AGENT
@@ -259,6 +260,21 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
     if mode == "rules":
         smap = _explore(ctx)
+    elif mode == "manual":
+        from .manual_explore import ManualRecorder
+        rec = ManualRecorder(ctx, save_path=paths.partial_map_path(ctx.cfg.app_dir))
+        theme.header("you drive, the monkey watches", "(o.o)")
+        click.echo("  The app restarts from a clean state. Use it on the emulator: tap, type, scroll, press Back.\n"
+                   "  Every step, screen and screenshot is recorded. Press Enter here when you are done.\n")
+        smap = rec.run(lambda: input())
+        smap.save(_map_path(ctx))
+        theme.ok(f"recorded {len(rec.path)} steps and {len(smap.screens)} screens")
+        theme.path_line("steps", rec.d.dir / "steps")
+        for v in getattr(rec, "videos", []):
+            theme.path_line("video", v)
+        if rec.outward_steps:
+            theme.warn(f"{len(rec.outward_steps)} step(s) act on the live backend ({', '.join(rec.outward_steps[:3])}); "
+                       "attacks will not replay them unless monkey.yaml allows those actions")
     elif mode == "jev":
         from .designer import load_flows
         from .jev_explore import JevExplorer

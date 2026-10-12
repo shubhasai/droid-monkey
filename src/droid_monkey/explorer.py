@@ -162,7 +162,17 @@ class Explorer:
         sid = "s" + hashlib.sha1("|".join(sorted(fp)).encode()).hexdigest()[:6]
         fields = [n.rid or f"EditText#{i}" for i, n in enumerate(screen.editable_fields(self.cfg.package))]
         self.map.screens[sid] = ScreenInfo(id=sid, path=path, title=self._title(screen), fields=fields, fingerprint=sorted(fp))
+        self._shoot(sid)
         return sid
+
+    def _shoot(self, sid: str) -> None:
+        """A picture of each screen as it was found, for the map and the report."""
+        try:
+            out = self.d.dir / "screens" / f"{sid}.png"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(ui.screenshot(self.adb))
+        except AdbError as e:
+            self.notes.append(f"screenshot of {sid}: {e}")
 
     def go_to(self, info: ScreenInfo) -> ui.Screen:
         self.d.fresh(clear_data=True)  # paths are recorded from a clean data state
