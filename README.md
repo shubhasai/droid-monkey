@@ -4,7 +4,7 @@
 
 It explores your app on an emulator. Then it hits the app with what real phones do to it: the system killing the app in the background, rotation, losing the network, permissions revoked in Settings, memory pressure, a loaded CPU and cold starts. When something breaks it measures exactly how, diagnoses the root cause in your code, and proposes a fix with the evidence. If you say yes, a coding agent makes the fix. droid-monkey then replays the **identical** attack plus a new regression test, and commits only if both pass.
 
-Built solo for **neatHack 2026** ("Build an agent that works, literally").
+Built solo by team **Logd** (individual) for **neatHack 2026** ("Build an agent that works, literally").
 
 > **It found a real bug in Google's official Android sample.** In [`android/architecture-samples`](https://github.com/android/architecture-samples), if you start editing a task and Android kills the app in the background, your edits are gone when you come back. `AddEditTaskViewModel` keeps the title and description only in a `MutableStateFlow`. droid-monkey reproduced the bug on a device, traced it to `AddEditTaskViewModel.kt:59`, and fixed it with a `SavedStateHandle` and a regression test, on the first try.
 

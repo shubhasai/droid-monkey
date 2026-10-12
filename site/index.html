@@ -212,6 +212,12 @@ figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
 .bench th.win,.bench td.win{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .bench tr.winrow td{background:var(--accent-soft);color:var(--accent);font-weight:600}
 @media (max-width:640px){.bench thead{display:table-header-group}.bench tr{display:table-row}.bench td{display:table-cell;padding:8px}}
+/* model-written attacks */
+.ai-attacks{display:grid;gap:16px;margin-top:22px}
+.ai-cols{margin-top:0}
+.ai-attacks .card{display:flex;flex-direction:column}
+.ai-attacks .cmd{margin-top:auto;padding-top:5px;overflow-wrap:anywhere}
+.ai-attacks .card p{margin-bottom:14px}
 /* features */
 .feat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:30px}
 @media (max-width:760px){.feat-grid{grid-template-columns:minmax(0,1fr)}}
@@ -245,6 +251,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       <a class="opt" href="#features">Features</a>
       <a class="opt" href="#watch">Watch</a>
       <a class="opt" href="#hunt">Hunt</a>
+      <a class="opt" href="#ux">UX audit</a>
       <a class="opt" href="#attacks">Attacks</a>
       <a class="opt" href="#proof">Results</a>
       <a class="opt" href="#sponsors">Sponsors</a>
@@ -256,7 +263,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
 <header class="hero">
   <div class="wrap hero-grid">
     <div>
-      <div class="eyebrow">An agent for Android apps · neatHack 2026</div>
+      <div class="eyebrow">An agent for Android apps · neatHack 2026 · Team Logd</div>
       <h1>Your app works on your desk. <em>Does it survive a real phone?</em></h1>
       <p class="lead">droid-monkey attacks any Android app with what real phones do to it, hunts for bugs in normal use,
         and fixes what breaks, <strong>with your consent</strong>. Every fix is proven by replaying the identical attack
@@ -450,6 +457,67 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
   </div>
 </section>
 
+<section id="ux">
+  <div class="wrap">
+    <div class="eyebrow">UX audit, on Wikipedia for Android</div>
+    <h2>An app can work and still lose its users.</h2>
+    <p class="lead">Nothing crashes when a new user can't find the way forward, waits two seconds after a tap, or meets
+      a switch that TalkBack reads as "View". <code>droid-monkey ux</code> looks for these on every mapped screen. On
+      the open-source Wikipedia app it mapped 40 screens with no changes to the app, and the audit cost $1.17.</p>
+    <div class="stats">
+      <div class="stat"><div class="n">40</div><div class="l">screens mapped from the code and the device</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">screens where the main action loses the user's attention</div></div>
+      <div class="stat"><div class="n">8</div><div class="l">steps slower than 1 s, the limit that keeps the flow</div></div>
+      <div class="stat"><div class="n">7 <small>+ 2</small></div><div class="l">findings seen on the device, plus 2 suspected in code only</div></div>
+    </div>
+    <div class="show">
+      <figure>
+        <div class="phone"><img src="assets/ux-onboarding.jpg" alt="Predicted attention heatmap of Wikipedia's first onboarding screen: the headline and 'Learn more about Wikipedia' are hot, the Forward arrow is cold" width="540" height="1212" loading="lazy"></div>
+        <figcaption>First onboarding screen: "Learn more" is predicted to draw 16× the attention of Forward (18% vs 1%).</figcaption>
+      </figure>
+      <figure>
+        <div class="phone"><img src="assets/ux-interests.jpg" alt="Predicted attention heatmap of Wikipedia's interests screen: the search bar and hint text are hot, Next is cold" width="540" height="1212" loading="lazy"></div>
+        <figcaption>Interests: Next ranks 7th of 8 controls, behind the search bar (28%).</figcaption>
+      </figure>
+      <div>
+        <ul class="found">
+          <li><b>1</b><div><strong>A promo covers the article you just opened.</strong> Tap the featured article,
+            wait 1.2 s, and get a full-screen Year in Review takeover instead. <span class="pill">high</span>
+            <div class="by">screenshot after the tap + measured wait · <code>BaseActivity.kt</code></div></div></li>
+          <li><b>2</b><div><strong>Onboarding hides the way forward.</strong> A small arrow is the only primary action,
+            and Home is 5 taps away with no Skip until the third screen.
+            <div class="by">attention heatmaps + taps from launch · <code>InitialOnboardingScreen.kt</code></div></div></li>
+          <li><b>3</b><div><strong>Settings switches with no name.</strong> TalkBack announces six unnamed "View"
+            controls on Community modules, and only the small switch is tappable, not the row.
+            <div class="by">UI dump · <code>Settings.kt</code></div></div></li>
+          <li><b>4</b><div><strong>A 3.7 s wait with no feedback</strong> after an unlabelled Forward arrow, on the
+            reading-list setup screen.
+            <div class="by">measured wait against the 1 s limit</div></div></li>
+          <li><b>5</b><div><strong>Tap targets under 48 dp:</strong> a 16 dp-tall contribution row, a 32 dp date
+            picker, an unlabelled My location button.
+            <div class="by">UI dump, measured in dp</div></div></li>
+        </ul>
+      </div>
+    </div>
+    <h3 class="bench-h">How the audit helps</h3>
+    <div class="cols">
+      <div class="card"><h3>See what users will miss</h3><p>A saliency model, combined with the screen's UI structure,
+        predicts where the eye goes and the share of attention each control gets. When the main action loses to a
+        link or an image, you see it before users don't tap it.</p></div>
+      <div class="card"><h3>Measured, not guessed</h3><p>Every wait is timed on the device against Nielsen's limits
+        (0.1 s instant, 1 s keeps the flow, 10 s loses attention). Touch targets are measured in dp, labels read from the
+        UI dump, taps counted from launch.</p></div>
+      <div class="card"><h3>Ready to fix</h3><p>Each finding has its evidence, why it matters, the change and the files
+        to edit, all ranked with attack and hunt issues by user impact. <code>droid-monkey fix</code> re-checks it on
+        the device and commits only if it's gone.</p></div>
+    </div>
+    <p class="muted bench-p" style="margin-top:22px">The heatmaps are predictions, not eye tracking. Findings seen on the
+      device and findings suspected from the code alone are labelled differently: Wikipedia's 2 suspected ones, like an
+      inverted check in <code>EditSectionActivity.kt</code> that can overwrite an unsaved edit, need an attack to
+      reproduce them before they count. Review by Claude Sonnet 5.5.</p>
+  </div>
+</section>
+
 <section id="how">
   <div class="wrap">
     <div class="eyebrow">How it works</div>
@@ -515,7 +583,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
           <li><b>7 built-in attacks:</b> process death, rotation, network loss, permission revoke, low memory, CPU load, slow startup.</li>
           <li><b>App-specific attacks</b> from your user flows, designed by an agent, or described in plain words.</li>
           <li><b>Hunt:</b> bugs in normal use, from the app's logs, every screen, and a model reading each journey.</li>
-          <li><b>UX audit:</b> touch targets, labels, attention heatmaps, measured waits.</li>
+          <li><b><a href="#ux">UX audit</a>:</b> touch targets, labels, attention heatmaps, measured waits.</li>
           <li><b>One ranked list</b> of every issue, by user impact.</li>
           <li><b>Deep evidence:</b> Perfetto traces, ANR stacks, leak chains from Shark, screen recordings.</li>
         </ul>
@@ -570,6 +638,46 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       </tbody>
     </table>
     </div>
+
+    <h3 class="bench-h">Attacks written by a model, for your app</h3>
+    <p class="muted bench-p">The built-ins are generic. The bugs that matter are often specific: rotating while the
+      order is placed, going offline right after switching a feed. The designer agent writes these as attack specs. It
+      reads the app's analysis, user flows, screen map and source, and composes the same verified building blocks the
+      built-ins use: 17 faults (rotate, network_off, kill_in_background, dark_mode, locale, cpu_stress…) and steps like
+      tap, fill, wait and settle.</p>
+    <div class="loop" aria-label="How a model-written attack is made">
+      <span class="step">you describe it, or the model picks a risk</span><span class="arrow">→</span>
+      <span class="step">model writes YAML</span><span class="arrow">→</span>
+      <span class="step code">validated in code</span><span class="arrow">→</span>
+      <span class="step code">tried on the emulator</span><span class="arrow">→</span>
+      <span class="step code">saved</span>
+    </div>
+    <div class="ai-attacks">
+      <div class="cols ai-cols">
+        <div class="card"><h3>In plain words</h3><p>Describe the attack and the designer turns it into a spec.</p>
+          <span class="cmd">droid-monkey attacks new "rotate the phone while the order is being placed"</span></div>
+        <div class="card"><h3>From your user flows</h3><p>Every risk the analysis found on a flow (checkout, login,
+          search) becomes an attack that injects that fault at the moment it named. On MonkeyMart the first two found a
+          real crash, for $0.01.</p>
+          <span class="cmd">droid-monkey attacks from-flows</span></div>
+        <div class="card"><h3>Designed for this app</h3><p>The agent reads the code and writes attacks the built-ins
+          don't cover, most likely real bug first.</p>
+          <span class="cmd">droid-monkey attacks suggest</span></div>
+      </div>
+<pre class="spec"><span class="cm"># wikipedia/.droid-monkey/attacks/flow_feed_refresh_offline.yaml, written by the model</span>
+<span class="k">description:</span> Losing the network right after switching the Home feed
+  to Community must show an error or retry, not go silent.
+<span class="k">screen:</span> <span class="v">homescreen</span>
+<span class="k">steps:</span>
+- <span class="k">tap:</span> <span class="v">text:Community</span>
+- <span class="k">fault:</span> <span class="v">network_off</span>
+- <span class="k">settle:</span> <span class="v">10</span>
+<span class="k">expect:</span> [<span class="v">no_crash, shows_feedback</span>]
+<span class="k">flow:</span> <span class="v">home_feed_browse</span></pre>
+    </div>
+    <p class="muted bench-p" style="margin-top:18px">The model only composes; it can't run anything. A step that isn't a
+      known building block with valid arguments is rejected, so a spec can never run an arbitrary command, and every
+      saved attack replays identically in each <code>droid-monkey run</code> from then on.</p>
   </div>
 </section>
 
@@ -799,7 +907,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
 <footer>
   <div class="wrap">
     <div>
-      <div><strong>droid-monkey</strong> · built solo for neatHack 2026 · MIT licence</div>
+      <div><strong>droid-monkey</strong> · built solo by team Logd (individual) for neatHack 2026 · MIT licence</div>
       <div><a href="https://github.com/shubhasai/droid-monkey">github.com/shubhasai/droid-monkey</a></div>
     </div>
 <pre aria-hidden="true">     .-"-.
