@@ -40,6 +40,11 @@ PERMISSION_ALLOW_IDS = [
 ]
 
 
+# Buttons that close a keyboard's own one-time sheets (Gboard's "Try out your stylus", tips, surveys). These belong to
+# the input method, not the app: left open they cover the app and every later check sees the keyboard's sheet.
+DISMISS_LABELS = {"cancel", "not now", "no thanks", "skip", "dismiss", "close", "got it", "maybe later"}
+
+
 class NavigationError(AdbError):
     pass
 
@@ -154,6 +159,7 @@ class AppDriver:
             time.sleep(0.3)
             ui.type_text(self.adb, text)
             ui.hide_keyboard(self.adb)
+            self.dismiss_interruption(ui.dump(self.adb))
         elif verb == "scroll":
             self.scroll(arg or "down")
         elif verb == "allow_permission":
@@ -210,6 +216,7 @@ class AppDriver:
                 else:
                     ui.type_text(self.adb, self.fill_value(node.rid or node.cls))
                 ui.hide_keyboard(self.adb)
+                self.dismiss_interruption(ui.dump(self.adb))
                 done.add(node.rid or node.bounds)
                 progressed = True
             scroller = ui.dump(self.adb).scrollable(self.package)
@@ -225,11 +232,24 @@ class AppDriver:
 
     # ---- watching --------------------------------------------------------------------------------
 
+    def dismiss_interruption(self, screen: ui.Screen) -> bool:
+        """Close a keyboard's own sheet covering the app (see DISMISS_LABELS). Returns True if one was closed."""
+        for n in screen.nodes:
+            if ("inputmethod" in n.package and n.clickable and n.area
+                    and (n.text or n.desc).strip().lower() in DISMISS_LABELS):
+                ui.tap(self.adb, n)
+                self.notes.append(f"closed a keyboard sheet ({n.package}: '{n.text or n.desc}')")
+                time.sleep(0.5)
+                return True
+        return False
+
     def settle(self, timeout: float = 12.0) -> tuple[ui.Screen, float, bool]:
         """Dump until two consecutive dumps show the same content and no progress indicator shows (positions may keep
         moving: animations). Returns (screen, seconds, saw_progress)."""
         start = time.time()
         prev = ui.dump(self.adb)
+        if self.dismiss_interruption(prev):
+            prev = ui.dump(self.adb)
         saw_progress = self.has_progress(prev)
         while time.time() - start < timeout:
             time.sleep(0.3)
