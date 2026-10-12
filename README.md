@@ -15,19 +15,116 @@ Built solo by team **Logd** (individual) for **neatHack 2026** ("Build an agent 
 ```
 analyze ──► explore ──► run:  plan → attack → decide → diagnose → ask you → fix → verify → commit ──► report / pr
  (code)     (device)          └──────────────── LangGraph, checkpointed, resumable, traced in neatlogs ────────┘
+                 │
+                 ├──► attacks new / suggest / from-flows   the attack designer agent writes attacks for this app
+                 ├──► hunt                                 bugs in normal use, no fault injected
+                 └──► ux                                   UX audit: heatmaps, waits, tap targets, suggested changes
+                                     all of them ──► issues (one ranked list) ──► fix ──► dashboard
 ```
 
 | Step | What happens |
 |---|---|
-| `analyze` | Static scan (manifest, permissions, 10 risk patterns), then a coding agent reads the repo and writes `ANALYSIS.md` plus the user flows worth testing |
-| `explore` | A coding agent works through a **checklist of the screens in the code** (`screens.json`: every activity, Compose screen, route, fragment and dialog, the code that opens it and the on-screen labels next to that code, built statically in under a second) **and drives the app** through droid-monkey's device tools, shortest route first. Result: a screen map where each screen is a node with a replayable path from launch, its actions and timings, and the source files behind it |
-| `attack` | Runs attacks built from fixed, verified building blocks (no arbitrary commands). Each attack judges the result in code: crash/ANR buffer, field diffs, frame stats, live Activities after a forced GC, launch times, plus a Perfetto trace |
-| `run` | The full loop. A model orders the attacks and decides diagnose / retry / give up; **code** decides every verdict |
-| diagnose | An agent on Haiku 5.5 reads the code (with `read_code`, `search_code`, Entire's code graph and SQL on the Perfetto trace) and returns the root cause with file:line evidence, a fix approach and a test plan |
+| **`analyze`** | Static scan (manifest, permissions, 10 risk patterns), then a coding agent reads the repo and writes `ANALYSIS.md` plus the user flows worth testing |
+| **`explore`** | A coding agent works through a **checklist of the screens in the code** (`screens.json`: every activity, Compose screen, route, fragment and dialog, the code that opens it and the on-screen labels next to that code, built statically in under a second) **and drives the app** through droid-monkey's device tools, shortest route first. Result: a screen map where each screen is a node with a replayable path from launch, its actions and timings, and the source files behind it |
+| **`attack`** | Runs attacks built from fixed, verified building blocks (no arbitrary commands). Each attack judges the result in code: crash/ANR buffer, field diffs, frame stats, live Activities after a forced GC, launch times, plus a Perfetto trace |
+| **`run`** | The full loop. A model orders the attacks and decides diagnose / retry / give up; **code** decides every verdict |
+| **diagnose** | An agent on Haiku 5.5 reads the code (with `read_code`, `search_code`, Entire's code graph and SQL on the Perfetto trace) and returns the root cause with file:line evidence, a fix approach and a test plan |
 | **ask you** | droid-monkey **never changes code without consent**. Every fix attempt, retries included, shows the issue, the measured evidence, the root cause and the suggested fix, and waits for **yes / no / all** |
-| fix | A coding agent (Claude Code, Codex or the API agent) edits only `app/src`. It has no shell, can't read docs or git history, and can't change build files. It has one extra tool: `compile` |
-| verify | Rebuild, replay the identical attack, run the new test. Fixed only if both pass; otherwise retry with a revised diagnosis (max 2) or roll back |
-| commit | One commit per fix on `droid-monkey/<run>`, with an Entire checkpoint. At the end you're put back on your own branch |
+| **fix** | A coding agent (Claude Code, Codex or the API agent) edits only `app/src`. It has no shell, can't read docs or git history, and can't change build files. It has one extra tool: `compile` |
+| **verify** | Rebuild, replay the identical attack, run the new test. Fixed only if both pass; otherwise retry with a revised diagnosis (max 2) or roll back |
+| **commit** | One commit per fix on `droid-monkey/<run>`, with an Entire checkpoint. At the end you're put back on your own branch |
+| **`attacks new` · `suggest` · `from-flows`** | The **attack designer agent** writes attacks for this app: from a sentence in plain words, from its own read of the code, or one per risk the analysis found on a user flow. It composes only verified building blocks; every spec is validated in code and tried on the emulator before it's saved |
+| **`hunt`** | Bugs in **normal use**, no fault injected: walks every journey like a user and checks the app's logs, every screen and, with a model, each journey's numbers |
+| **`ux`** | The **UX audit**: a predicted attention heatmap for every screen, waits measured against Nielsen's limits, tap targets and labels, and a model's review of every screenshot, written as a change to make. Asks about each finding; a yes makes the change ([on Wikipedia](#wikipedia-a-large-real-app-and-the-ux-audit)) |
+| **`issues`** · **`fix`** | Every open issue from attacks, hunt and UX in one list, ranked by user impact; `fix` repairs one with your consent and commits it only if it's gone on the device |
+| **`dashboard`** | A live local page over every run, screen, heatmap and issue; stream the emulator and run any command from it |
+
+## Architecture
+
+droid-monkey runs on your machine and works with three things it doesn't own: **your app's repo**, a **coding agent** (Claude Code, Codex or its own API agent) and an **Android emulator**. The coding agent never drives the device directly: it gets droid-monkey's two MCP servers, `device` (drive the app) and `build` (compile), and Claude Code and the API agent get no shell (Codex has one only inside its sandbox). Every fault, screen read and verdict goes through droid-monkey's own code over `adb`.
+
+```
+                                            You
+                                commands · yes / no · dashboard
+                                             │
+┌────────────────────────────────────────────▼───────────────────────────────────────────┐
+│ droid-monkey  (Python, on your machine)                                                │
+│                                                                                        │
+│   run loop (LangGraph)     models (Anthropic API)        code only                     │
+│   plan · decide ·          diagnose · design attacks ·   spec runner · AppDriver ·     │
+│   ask you                  hunt · UX review              verifier · every verdict      │
+│                                                                                        │
+│   MCP servers for the coding agent:   device  launch, tap, type, scroll, record_screen │
+│                                       build   compile                                  │
+└──────┬────────────▲─────────────────────────┬─────────────────────────┬─────────▲──────┘
+       │ 1          │ 2                       │ 4                       │ 6       │ 7
+       ▼            │                         ▼                         ▼         │
+┌───────────────────┴──────┐  3   ┌──────────────────────────┐  5   ┌─────────────┴──────────┐
+│ Coding agent, one of:    ├─────►│ Your Android app repo    ├─────►│ Android emulator       │
+│  Claude Code  claude -p  │      │  app/src                 │      │  your app, debug build │
+│  Codex        codex exec │      │  Gradle                  │      │  Android: activity     │
+│  API agent    own loop   │      │  droid-monkey/<run>      │      │  manager, settings,    │
+│                          │      │  branch + Entire         │      │  network, logcat,      │
+│                          │      │  checkpoints             │      │  Perfetto              │
+└──────────────────────────┘      └──────────────────────────┘      └────────────────────────┘
+```
+
+1. **Tasks for the coding agent**: read the repo (`analyze`), map every screen (`explore`), or make one fix with a brief that names the root cause, the files and the test to write.
+2. **MCP tool calls back to droid-monkey**: `device` to drive the app while exploring, `build` to compile while fixing. The agent is never given `adb`.
+3. **Edits**: only under `app/src`; anything else the agent changes is discarded.
+4. **droid-monkey on the repo**: the models read and search the code (with Entire's code graph); the verifier builds with Gradle; a fix is committed on `droid-monkey/<run>` only if it's proven.
+5. **The build**: Gradle's APK is installed on the emulator, and droid-monkey records which source it was built from.
+6. **Driving the device over `adb`**: replaying paths, taps and form fills, screen reads through uiautomator, and the faults (kill in background, rotate, network off, revoke a permission, trim memory, CPU load, cold starts).
+7. **Evidence back**: crash and ANR buffers, logcat, field values, frame stats, live Activities after a forced GC, heap dumps and a Perfetto trace. Code turns these into the verdict.
+
+### One attack, start to fix
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant DM as droid-monkey
+    participant AG as Claude Code / Codex
+    participant RP as App repo + Gradle
+    participant EM as Emulator + your app
+
+    Note over DM,EM: explore (once)
+    DM->>AG: map every screen in screens.json
+    AG->>DM: device MCP: launch, tap, type, record_screen
+    DM->>EM: adb input and uiautomator reads
+    EM-->>DM: screen, timings, crashes
+    DM->>DM: screen map, a replayable path per screen
+
+    Note over DM,EM: attack
+    DM->>EM: replay the path, inject the fault (for example kill in background)
+    EM-->>DM: crash buffer, field values, frame stats, Perfetto trace
+    DM->>DM: verdict decided in code (crashed, lost_state, froze...)
+
+    Note over DM,RP: diagnose and ask
+    DM->>RP: read code, Entire code graph, SQL on the trace (Anthropic API)
+    DM->>You: issue, evidence, root cause at file:line, suggested fix. Fix it?
+    You-->>DM: yes
+
+    Note over AG,RP: fix
+    DM->>AG: fix brief on a droid-monkey branch
+    AG->>RP: edit app/src only, no shell
+    AG->>DM: build MCP: compile
+    DM-->>AG: compile errors, if any
+
+    Note over DM,EM: verify
+    DM->>RP: gradle build
+    DM->>EM: install, replay the identical attack
+    DM->>RP: run the new regression test
+    alt replay survives and the test passes
+        DM->>RP: commit with an Entire checkpoint
+    else either fails
+        DM->>DM: revised diagnosis and retry (max 2), else roll back
+    end
+```
+
+- **Claude Code** runs as `claude -p` with allow and deny rules and no shell. **Codex** runs as `codex exec` in its sandbox. The **API agent** is droid-monkey's own tool loop for people with neither CLI. All three get the same brief and the same two MCP servers, and droid-monkey discards any edit outside `app/src` afterwards.
+- **The emulator** is found, booted, health-checked and restarted by droid-monkey (a watchdog restarts a hung device). Screens are read through uiautomator (uiautomator2's on-device helper when installed, about 30 ms a read).
+- **Models decide, code judges.** Models plan, explore, diagnose, design attacks and review UX; every verdict (crashed, leaked, froze, fixed) is measured on the device by code.
 
 ## Features
 
@@ -145,6 +242,7 @@ Every `run` and `attack` ends with a **visual report** (`dashboard.html`). Each 
 | `attack NAME\|builtin\|custom\|all [--diagnose] [--target --action]` | Run attacks, no fixing. Builds first if the installed app wasn't built from the current source |
 | `issues [--rerank]` / `fix ISSUE` | Every open issue (attacks, hunt, UX) in one list, **ranked by Jev** (TypeSafe): expected impact on users × how likely it is a real bug (severity fallback without a key). `fix` repairs one hunt/UX issue with your consent, re-checks it on the device and commits only if it is gone; attack failures go through `run --attacks NAME`. The dashboard's **Issues** page has a Fix button on each |
 | `hunt [--no-model]` | Bugs in **normal use**, no fault injected: walks every recorded path like a user and checks the app's logs after each step (crashes, exceptions the app caught and only logged, main-thread jank, leaked windows), every screen (`null`/`NaN`/unfilled placeholders, negative money, blank screens, duplicate rows) and, with a model reading the screenshots, each journey's numbers and messages. A model finding must quote text that is really on the screen it cites, or it is dropped → `HUNT.md`, `issues.json` |
+| `ux [--no-apply] [--agent api\|claude\|codex] [--review-model M]` | **UX audit** of every mapped screen: predicted attention heatmaps, waits measured against Nielsen's limits, tap targets under 48 dp, unlabelled controls, taps from launch, and a model's review of every screenshot with the code behind it. Each finding comes as a change (problem, evidence, why it matters, the edit, the files); findings seen on the device and ones suspected from code only are labelled apart. Then it asks about each finding; a yes has a coding agent make the change, which is discarded if the app doesn't build; otherwise droid-monkey reopens the screen for a before/after screenshot and commits it (`--no-apply` only writes the audit) → `UX_AUDIT.md`, `ux-audit.html`, `attention/` |
 | `attacks list\|show\|suggest\|new\|from-flows` | Built-in and app-specific attack types; the designer agent; attacks from the analysed user flows |
 | `run [--attacks a,b] [--screens N] [--agent] [--auto-fix] [--resume ID]` | The full loop. `--auto-fix` skips the question (CI); `--resume` continues a killed or paused run. Every run ends with a **receipt**: what was found and fixed, time, and tokens and cost per step |
 | `report RUN` / `compare A B` / `pr RUN` | PR body, score card and dashboard / before-after table / push and open the PR |
@@ -229,6 +327,43 @@ The [Wikipedia Android app](https://github.com/wikimedia/apps-android-wikipedia)
 | First onboarding screen: the eye goes to the headline and "Learn more", not Forward | Interests: Next ranks 7th of 8 |
 |---|---|
 | <img src="docs/img/wikipedia-heatmap-onboarding.jpg" width="300" alt="Predicted attention heatmap of Wikipedia's first onboarding screen"> | <img src="docs/img/wikipedia-heatmap-interests.jpg" width="300" alt="Predicted attention heatmap of Wikipedia's interests screen"> |
+
+<details>
+<summary><b>All 40 heatmaps</b> (the 5 screens where the main action loses come first; on the <a href="https://shubhasai.github.io/droid-monkey/#ux">landing page</a> they're in a carousel with each screen's numbers)</summary>
+
+| | | | | |
+|---|---|---|---|---|
+| <img src="site/assets/heatmaps/initialonboardingscreen.jpg" width="160" alt="Onboarding 1: welcome"><br><sub>Onboarding 1: welcome</sub> | <img src="site/assets/heatmaps/interestonboardingscreen.jpg" width="160" alt="Onboarding 4: interests"><br><sub>Onboarding 4: interests</sub> | <img src="site/assets/heatmaps/talkreplyactivity.jpg" width="160" alt="Talk reply"><br><sub>Talk reply</sub> | <img src="site/assets/heatmaps/gameshubscreen.jpg" width="160" alt="Games hub"><br><sub>Games hub</sub> | <img src="site/assets/heatmaps/sourceselectionscreen.jpg" width="160" alt="Reading list: source"><br><sub>Reading list: source</sub> |
+| <img src="site/assets/heatmaps/initialonboardinglanguagesscreen.jpg" width="160" alt="Onboarding 2: languages"><br><sub>Onboarding 2: languages</sub> | <img src="site/assets/heatmaps/onboardingcuriosityscreen.jpg" width="160" alt="Onboarding 3: curiosity"><br><sub>Onboarding 3: curiosity</sub> | <img src="site/assets/heatmaps/homescreen.jpg" width="160" alt="Home feed"><br><sub>Home feed</sub> | <img src="site/assets/heatmaps/pageactivity.jpg" width="160" alt="Article (after tap)"><br><sub>Article (after tap)</sub> | <img src="site/assets/heatmaps/talktopicactivity.jpg" width="160" alt="Talk topic"><br><sub>Talk topic</sub> |
+| <img src="site/assets/heatmaps/edithistorylistactivity.jpg" width="160" alt="Edit history"><br><sub>Edit history</sub> | <img src="site/assets/heatmaps/articleeditdetailsactivity.jpg" width="160" alt="Edit details (diff)"><br><sub>Edit details (diff)</sub> | <img src="site/assets/heatmaps/usercontriblistactivity.jpg" width="160" alt="User contributions"><br><sub>User contributions</sub> | <img src="site/assets/heatmaps/searchfragment.jpg" width="160" alt="Search"><br><sub>Search</sub> | <img src="site/assets/heatmaps/yearinreviewscreen.jpg" width="160" alt="Year in Review"><br><sub>Year in Review</sub> |
+| <img src="site/assets/heatmaps/settingsfragment.jpg" width="160" alt="Settings"><br><sub>Settings</sub> | <img src="site/assets/heatmaps/communitymodulesscreen.jpg" width="160" alt="Community modules"><br><sub>Community modules</sub> | <img src="site/assets/heatmaps/donationreminderscreen.jpg" width="160" alt="Donation reminder"><br><sub>Donation reminder</sub> | <img src="site/assets/heatmaps/developersettingsfragment.jpg" width="160" alt="Developer settings"><br><sub>Developer settings</sub> | <img src="site/assets/heatmaps/placesfragment.jpg" width="160" alt="Places"><br><sub>Places</sub> |
+| <img src="site/assets/heatmaps/onthisdayfragment.jpg" width="160" alt="On this day"><br><sub>On this day</sub> | <img src="site/assets/heatmaps/filepagefragment.jpg" width="160" alt="File page (Picture of the day)"><br><sub>File page (Picture of the day)</sub> | <img src="site/assets/heatmaps/talktopicsactivity.jpg" width="160" alt="Talk topics"><br><sub>Talk topics</sub> | <img src="site/assets/heatmaps/composelanglinksscreen.jpg" width="160" alt="Article languages"><br><sub>Article languages</sub> | <img src="site/assets/heatmaps/tabactivity.jpg" width="160" alt="Tabs"><br><sub>Tabs</sub> |
+| <img src="site/assets/heatmaps/usercontribfilteractivity.jpg" width="160" alt="Contributions filter"><br><sub>Contributions filter</sub> | <img src="site/assets/heatmaps/wikipedialanguagesactivity.jpg" width="160" alt="Wikipedia languages"><br><sub>Wikipedia languages</sub> | <img src="site/assets/heatmaps/languageslistscreen.jpg" width="160" alt="Add a language"><br><sub>Add a language</sub> | <img src="site/assets/heatmaps/installwidgetscreen.jpg" width="160" alt="Install widget"><br><sub>Install widget</sub> | <img src="site/assets/heatmaps/historyfragment.jpg" width="160" alt="History"><br><sub>History</sub> |
+| <img src="site/assets/heatmaps/onboardingscreen.jpg" width="160" alt="Feature onboarding"><br><sub>Feature onboarding</sub> | <img src="site/assets/heatmaps/menunavtabdialog.jpg" width="160" alt="Main menu"><br><sub>Main menu</sub> | <img src="site/assets/heatmaps/onthisdaygamemainmenufragment.jpg" width="160" alt="On this day game: menu"><br><sub>On this day game: menu</sub> | <img src="site/assets/heatmaps/onthisdaygameplayfragment.jpg" width="160" alt="On this day game: play"><br><sub>On this day game: play</sub> | <img src="site/assets/heatmaps/homefeedsettingsscreen.jpg" width="160" alt="Home feed settings"><br><sub>Home feed settings</sub> |
+| <img src="site/assets/heatmaps/feedconfigurationscreen.jpg" width="160" alt="Feed configuration"><br><sub>Feed configuration</sub> | <img src="site/assets/heatmaps/homefeeddefaultviewscreen.jpg" width="160" alt="Default feed view"><br><sub>Default feed view</sub> | <img src="site/assets/heatmaps/aboutwikipediascreen.jpg" width="160" alt="About Wikipedia"><br><sub>About Wikipedia</sub> | <img src="site/assets/heatmaps/placesfilteractivity.jpg" width="160" alt="Places filter"><br><sub>Places filter</sub> | <img src="site/assets/heatmaps/didyouknowscreen.jpg" width="160" alt="Did you know"><br><sub>Did you know</sub> |
+</details>
+
+#### How the UX audit helps
+- **It finds problems that never crash.** A user who can't find the way forward, waits 2 s after a tap, or hears "View" from TalkBack just leaves. No crash report, no stack trace, nothing in the logs.
+- **It shows what users will miss before they miss it.** The heatmap predicts where the eye goes and gives each control a share of attention, so a main button that loses to a link or an image shows up as a number.
+- **It measures instead of guessing.** Waits are timed on the device, tap targets measured in dp, labels read from the UI dump, taps counted from launch.
+- **It gives a change, not a complaint.** Each finding says what to edit and in which file, and joins the same ranked `issues` list as crashes and leaks, so UX work is prioritised against everything else.
+- **It keeps evidence honest.** What was seen on the device and what was only suspected in the code are labelled apart.
+
+#### What the agent suggests changing in Wikipedia
+The 7 findings seen on the device, each with the change the review proposed. These are proposals: no changes were made to Wikipedia.
+
+| Severity | Seen on the device | Suggested change | Files |
+|---|---|---|---|
+| **high** | Tapping the featured article waits 1.2 s, then shows a full-screen Year in Review promo instead of the article | Show announcements only on the main screen, not on `PageActivity`; or only after the article has loaded and the user has scrolled | `BaseActivity.kt` |
+| medium | Onboarding's only main action is a small arrow: "Learn more" draws 16× its attention, Next ranks 7th of 8, Home is 5 taps away, Skip appears only on screen 3 | A filled, labelled "Continue" button; Skip on every step; a smaller "Learn more" | `InitialOnboardingScreen.kt`, `PersonalizationScreen.kt` |
+| medium | TalkBack reads six unnamed "View" switches on Community modules (and more in Settings and the donation reminder); only the small switch takes the tap | Make the whole row one toggleable control with the switch role: "Featured article, switch, on" | `Settings.kt`, `CommunityModulesScreen.kt`, `DonationReminderScreen.kt` |
+| medium | Reading-list setup: an unlabelled Forward arrow, last of 4 controls, then 3.7 s with nothing on screen | A full-width "Next" button with progress once tapped; start the fetch when the screen opens | `RecommendedReadingListSourceScreen.kt` |
+| medium | Tap targets under 48 dp: a 16 dp-tall contribution row (unlabelled), a 32 dp date picker, 44 dp Map/List toggles, an unlabelled My location button | Content descriptions, full-card rows, 48 dp touch areas | `UserContribItemView.kt`, `EditHistoryItemView.kt`, `PlacesFragment.kt` |
+| low | The talk reply box opens with raw `@[[User:SL93\|SL93]]`, 4.4× the attention of Next | Show the mention as a chip or "@SL93"; convert to wikitext only when sending | `TalkReplyActivity.kt` |
+| low | Opening the Picture of the day takes 2.3 s with nothing showing it's loading | Show the title and the feed's thumbnail at once, with progress for the details | `FilePageFragment.kt` |
+
+Plus 2 suspected from the code only, on screens nobody reached (for example an inverted check in `EditSectionActivity.kt` that can overwrite an unsaved edit after the Activity is recreated). They don't count as findings until an attack reproduces them.
 
 The heatmaps are predictions, not eye tracking, and each finding says whether it is observed or suspected. The attacks also found a real leak in Wikipedia: `YearInReviewOnboardingActivity` instances stay alive after a forced GC (1 → 3).
 
