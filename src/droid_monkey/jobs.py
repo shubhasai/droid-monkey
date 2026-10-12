@@ -263,3 +263,74 @@ class Jobs:
                 except ProcessLookupError:
                     pass
         threading.Timer(15, hard_stop).start()
+
+
+# ---- how the dashboard presents the commands --------------------------------------------------------------
+
+@dataclass
+class Guide:
+    path: str
+    title: str                  # what it does, in plain words
+    what: str                   # one or two sentences
+    stage: str
+    uses: list[str]             # device | model | code | publishes
+    cost: str = ""              # rough time and money
+    requires: list[str] = field(default_factory=list)  # files in .droid-monkey (or the repo) it needs first
+    primary: list[str] = field(default_factory=list)   # options shown up front; the rest under "More options"
+    labels: dict[str, str] = field(default_factory=dict)  # option -> plain label
+
+
+STAGES = ["Set up", "Map", "Find bugs", "Fix", "UX", "Share", "Tools"]
+GUIDES = [
+    Guide("init", "Connect droid-monkey to this app", "Writes monkey.yaml for the repo and checks the emulator, "
+          "Gradle, the coding agent and your keys.", "Set up", [], "seconds", [], ["force"],
+          {"force": "Overwrite an existing monkey.yaml"}),
+    Guide("analyze", "Read the code", "A coding agent reads the repo and writes the user flows, their risks and "
+          "the checklist of screens. Every later step uses it.", "Set up", ["model"], "~5 min · ~$1–4 on a large app",
+          ["../monkey.yaml"], ["static_only"], {"static_only": "Free static scan only (no agent)"}),
+    Guide("explore", "Map the app's screens", "Drives the app on the emulator and records every screen, how to "
+          "reach it and the code behind it. Attacks, hunts and the UX audit replay these paths.", "Map",
+          ["device", "model"], "≤10 min by default · ~$2–7", ["../monkey.yaml"], ["mode", "minutes", "max_screens"],
+          {"mode": "How to explore", "minutes": "Time limit (minutes)", "max_screens": "Screen limit",
+           "check_paths": "Replay every path afterwards", "from_partial": "Don't explore: re-check the saved map"}),
+    Guide("hunt", "Find bugs in normal use", "Walks every mapped journey like a user, no fault injected: crashes, "
+          "swallowed exceptions, jank, 'null' on screen, and (with a model) numbers that don't add up.", "Find bugs",
+          ["device", "model"], "~1 min per journey · cents", ["screen-map.json"], ["use_model"],
+          {"use_model": "Also check each journey's numbers with a model", "build": "Rebuild the app first"}),
+    Guide("attack", "Attack with real-world faults", "Rotation, process death, network loss, revoked permissions, "
+          "low memory, a loaded CPU, cold starts, on the riskiest screens. Finds bugs, changes no code.", "Find bugs",
+          ["device"], "~30 s per attack · free (+cents with diagnosis)", ["screen-map.json"],
+          ["name", "screens", "diagnose"],
+          {"name": "Which attack", "screens": "Screens per attack", "diagnose": "Diagnose each failure (suggests a fix)",
+           "target": "Screen id (override)", "action": "Trigger step (override)", "build": "Rebuild the app first",
+           "re_explore": "Explore again first"}),
+    Guide("attacks from-flows", "Design attacks from the user flows", "Turns the risks the analysis found on each "
+          "user flow into an attack, tries it on the device and saves it.", "Find bugs", ["device", "model"],
+          "~1–2 min per attack · cents", ["flows.json", "screen-map.json"], ["limit", "all_flows"],
+          {"limit": "How many to design", "all_flows": "Include flows the explorer never reached",
+           "try_on_device": "Try each one on the emulator before saving"}),
+    Guide("run", "Find, fix and verify", "The full loop: attack, diagnose the root cause, ask you before every fix, "
+          "let the coding agent fix it, replay the identical attack and commit only if it passes.", "Fix",
+          ["device", "model", "code"], "~5–20 min · cents to a few $", ["screen-map.json"], ["only", "screens", "auto_fix"],
+          {"only": "Only these attacks (comma-separated)", "screens": "Screens per attack",
+           "auto_fix": "Fix without asking (CI only)", "agent": "Coding agent", "resume_id": "Resume a run (its id)"}),
+    Guide("ux", "Audit the UX", "Reviews every screen: touch targets, labels, predicted attention, measured "
+          "waits; then asks you about each change.", "UX", ["model", "code"], "~3 min · ~$1",
+          ["screen-map.json"], ["apply"], {"apply": "Ask me about each finding and make the ones I accept"}),
+    Guide("report", "Build a run's report", "Writes the PR body, score card and visual report for a finished run.",
+          "Share", [], "seconds", [], ["run_id"], {"run_id": "Run"}),
+    Guide("compare", "Compare two runs", "A before/after table, e.g. a naive baseline against a normal run.",
+          "Share", [], "seconds", [], ["run_a", "run_b"], {"run_a": "Run A", "run_b": "Run B"}),
+    Guide("pr", "Open a pull request", "Pushes the run's branch with its Entire checkpoints and opens a GitHub PR "
+          "with the evidence.", "Share", ["publishes"], "seconds", [], ["run_id", "draft"],
+          {"run_id": "Run", "draft": "Open as a draft", "base": "Base branch"}),
+    Guide("attacks suggest", "Let the designer invent attacks", "The designer agent writes new attack types for this "
+          "app from its analysis and screen map.", "Tools", ["device", "model"], "a few min · cents",
+          ["screen-map.json"], ["count"], {"count": "How many"}),
+    Guide("attacks new", "Describe an attack in plain words", "The designer agent turns your sentence into a "
+          "validated attack and tries it.", "Tools", ["device", "model"], "~1–2 min · cents", ["screen-map.json"],
+          ["prompt"], {"prompt": "Describe the attack"}),
+    Guide("attacks list", "List attacks", "Built-in attacks and this app's saved ones.", "Tools", [], "seconds"),
+    Guide("attacks show", "Show a saved attack", "Prints a saved attack spec.", "Tools", [], "seconds", [],
+          ["name"], {"name": "Attack"}),
+]

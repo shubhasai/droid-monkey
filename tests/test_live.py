@@ -66,3 +66,23 @@ def test_server_serves_inside_the_folder_only(tmp_path):
                 assert e.code == 404
     finally:
         httpd.shutdown()
+
+
+def test_commands_page_guides_a_new_app(tmp_path):
+    app = tmp_path / "app"
+    (app / ".droid-monkey").mkdir(parents=True)
+    (app / "monkey.yaml").write_text("package: com.ex\n")
+    page = live.page_commands(app / ".droid-monkey", app, None)   # nothing analysed, mapped or run yet
+    assert 'SUGGESTED="analyze"' in page
+    assert "Needs a screen map first" in page and "Needs the user flows first" in page
+    assert "Map the app&#x27;s screens" in page or "Map the app's screens" in page
+    assert page.count('class="run" disabled') >= 5     # every step that needs a screen map waits for it
+    assert "Nothing to choose yet." in page            # no runs to report on yet
+
+
+def test_commands_page_offers_attacks_to_pick(tmp_path):
+    app, root = _folder(tmp_path)
+    (root / "attacks").mkdir()
+    (root / "attacks" / "flow_x.yaml").write_text("name: flow_x\n")
+    page = live.page_commands(root, app, None)
+    assert "Built-in: rotation" in page and "Saved: flow_x" in page and 'SUGGESTED="analyze"' in page

@@ -477,58 +477,130 @@ def page_files(root: Path, app: Path) -> str:
            f'<th class="num">Modified</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
 
 
-def _field(cmd, p) -> str:
+REQUIRES = {"../monkey.yaml": ("monkey.yaml", "init"), "screen-map.json": ("a screen map", "explore"),
+            "flows.json": ("the user flows", "analyze")}
+USES = {"device": ("Uses the emulator", "dev"), "model": ("Calls a model", "mod"),
+        "code": ("Changes code, asks you first", "code"), "publishes": ("Publishes to GitHub", "pub")}
+MODE_HELP = {"agent": "A coding agent reads the code and drives the app (recommended)",
+             "fast": "No model: quick depth-first tapping", "manual": "You drive the app, droid-monkey records",
+             "rules": "No model: taps everything", "claude": "Old name for agent"}
+
+
+def _options(root: Path, cmd: str, param: str) -> list[tuple[str, str]] | None:
+    """Values to pick from instead of typing, for options whose values droid-monkey knows."""
+    if (cmd, param) == ("attack", "name"):
+        from .specs import BUILTIN_DIR
+        builtin = sorted(p.stem for p in BUILTIN_DIR.glob("*.yaml"))
+        saved = sorted(p.stem for p in (root / "attacks").glob("*.yaml")) if (root / "attacks").exists() else []
+        return ([("builtin", "All built-in attacks"), ("custom", "All of this app's saved attacks"), ("all", "Everything")]
+                + [(n, f"Built-in: {n.replace('_', ' ')}") for n in builtin] + [(n, f"Saved: {n}") for n in saved])
+    if (cmd, param) == ("attacks show", "name"):
+        return [(p.stem, p.stem) for p in sorted((root / "attacks").glob("*.yaml"))] if (root / "attacks").exists() else []
+    if param in ("run_id", "run_a", "run_b") and cmd in ("report", "pr", "compare"):
+        rs = runs(root)
+        if cmd in ("report", "pr"):
+            rs = [r for r in rs if (root / "runs" / r["id"] / "summary.json").exists()]
+        return [(r["id"], f'{r["id"]} · {r["attacks"]} attacks, {r["broke"]} broke') for r in rs]
+    return None
+
+
+def _field(root: Path, cmd, p, label: str) -> str:
     fid = f"{cmd.path.replace(' ', '-')}-{p.name}"
-    tip = f' title="{esc(p.help)}"' if p.help else ""
-    hint = f'<span class="fhelp">{esc(p.help)}</span>' if p.help else ""
+    hint = f'<span class="fhelp">{esc(p.help)}</span>' if p.help and len(p.help) < 260 else ""
+    flag = f'<code class="flagname">{esc(p.label if p.kind != "argument" else p.name.upper())}</code>'
     if p.kind == "flag":
-        return (f'<label class="fflag"{tip}><input type="checkbox" name="{esc(p.name)}"{" checked" if p.default else ""}>'
-                f'<span><code>{esc(p.on if not p.default else (p.off or p.on))}</code>'
-                f'{" (on by default)" if p.default else ""}</span>{hint}</label>')
-    if p.kind == "choice":
-        opts = "".join(f'<option{" selected" if c == p.default else ""}>{esc(c)}</option>' for c in [""] + p.choices)
-        control = f'<select name="{esc(p.name)}" id="{fid}">{opts}</select>'
+        return (f'<label class="fflag"><input type="checkbox" name="{esc(p.name)}"{" checked" if p.default else ""}>'
+                f'<span class="flabel">{esc(label)} {flag}</span>{hint}</label>')
+    opts = _options(root, cmd.path, p.name)
+    if p.name == "mode" and p.kind == "choice":
+        opts = [(c, MODE_HELP.get(c, c)) for c in p.choices if c != "claude"]
+    elif opts is None and p.kind == "choice":
+        opts = [("", "Default")] + [(c, c) for c in p.choices]
+    if opts is not None:
+        default = p.default if p.default is not None else (opts[0][0] if p.required and opts else "")
+        empty = "" if p.required or any(v == default for v, _ in opts) else '<option value="">Default</option>'
+        control = (f'<select name="{esc(p.name)}" id="{fid}">{empty}' + "".join(
+            f'<option value="{esc(v)}"{" selected" if v == default else ""}>{esc(t)}</option>' for v, t in opts)
+            + "</select>") if opts else '<p class="hint">Nothing to choose yet.</p>'
     else:
-        typ = {"int": "number", "float": "number"}.get(p.kind, "text")
-        step = ' step="any"' if p.kind == "float" else ""
-        ph = f' placeholder="{esc(str(p.default))}"' if p.default not in (None, "") else ""
-        control = (f'<input type="{typ}"{step} name="{esc(p.name)}" id="{fid}"{ph}'
-                   f'{" required" if p.required else ""}>')
-    label = p.label if p.kind != "argument" else p.label.upper()
-    return f'<label class="ffield" for="{fid}"{tip}><span><code>{esc(label)}</code>{" *" if p.required else ""}</span>{control}{hint}</label>'
+        typ = "number" if p.kind in ("int", "float") else "text"
+        ph = f' placeholder="default: {esc(str(p.default))}"' if p.default not in (None, "") else ' placeholder="default"'
+        control = f'<input type="{typ}"{" step=any" if p.kind == "float" else ""} name="{esc(p.name)}" id="{fid}"{ph}{" required" if p.required else ""}>'
+    return f'<label class="ffield" for="{fid}"><span class="flabel">{esc(label)}{" *" if p.required else ""} {flag}</span>{control}{hint}</label>'
+
+
+def _missing(root: Path, g) -> list[tuple[str, str]]:
+    return [REQUIRES.get(r, (r, "")) for r in g.requires if not (root / r).exists()]
+
+
+def _next_step(root: Path) -> str:
+    if not (root.parent / "monkey.yaml").exists():
+        return "init"
+    if not (root / "flows.json").exists():
+        return "analyze"
+    if not (root / "screen-map.json").exists():
+        return "explore"
+    return "hunt"
 
 
 def page_commands(root: Path, app: Path, jobs=None) -> str:
     from . import jobs as jobs_mod
     cmds = jobs_mod.commands()
     busy = jobs.busy() if jobs else None
-    groups = []
-    for title, names in jobs_mod.GROUPS:
-        cards = []
-        for n in names:
-            c = cmds.get(n)
-            if not c:
-                continue
-            fields = "".join(_field(c, p) for p in c.params)
-            warn = ('<p class="danger">Publishes: pushes the run branch and opens a pull request on GitHub. '
-                    'You will be asked to confirm.</p>') if c.publishes else ""
-            cards.append(f"""<form class="cmd" data-cmd="{esc(c.path)}" data-publishes="{1 if c.publishes else 0}">
-<div class="cmd-head"><h3><code>droid-monkey {esc(c.path)}</code></h3>
-<button type="submit" class="run"{" disabled" if busy else ""}>Run</button></div>
-<p class="hint">{esc(c.help)}</p>{warn}{f'<div class="fields">{fields}</div>' if fields else ''}
-<p class="preview"><code></code></p></form>""")
-        groups.append(f'<section class="cgroup"><h2>{esc(title)}</h2><div class="cgrid">{"".join(cards)}</div></section>')
-    hist = jobs.history()[:20] if jobs else []
-    rows = "".join(f'<tr><td><a href="/job/{esc(j.id)}"><code>{esc(j.command)}</code></a></td>'
-                   f'<td><code class="args">{esc(" ".join(j.args[len(j.command.split()):]))}</code></td>'
-                   f'<td>{_jstatus(j.status)}</td><td class="num">{time.strftime("%m-%d %H:%M", time.localtime(j.started))}</td>'
-                   f'<td class="num">{_dur(j)}</td></tr>' for j in hist)
-    running = (f'<p class="busy">Running now: <a href="/job/{esc(busy.id)}"><code>{esc(busy.command)}</code></a>. '
-               'Commands share the emulator, so one runs at a time.</p>') if busy else ""
-    return f"""<header class="top"><h1>Commands</h1><p class="meta">Every droid-monkey command, run in <code>{esc(str(app))}</code>.
-Options come from the CLI itself; leave a field empty for its default.</p>{running}</header>
-{''.join(groups)}
-<section class="panel"><h2>Recent jobs</h2>{('<div class="scroll"><table><thead><tr><th>Command</th><th>Options</th><th>Status</th><th class="num">Started</th><th class="num">Took</th></tr></thead><tbody>' + rows + '</tbody></table></div>') if rows else '<p class="hint">None yet.</p>'}</section>"""
+    history = jobs.history() if jobs else []
+    last = {}
+    for j in history:
+        last.setdefault(j.command, j)
+    titles = {g.path: g.title for g in jobs_mod.GUIDES}
+    suggested = _next_step(root)
+    nav, panels = [], []
+    for stage in jobs_mod.STAGES:
+        items = [g for g in jobs_mod.GUIDES if g.stage == stage and g.path in cmds]
+        if not items:
+            continue
+        nav.append(f'<li class="stage">{esc(stage)}</li>')
+        for g in items:
+            c = cmds[g.path]
+            miss = _missing(root, g)
+            j = last.get(g.path)
+            state = (f'needs {esc(miss[0][0])}' if miss else
+                     f'last run {time.strftime("%H:%M", time.localtime(j.started))} · {j.status}' if j else "ready")
+            tone = "miss" if miss else (j.status if j else "ready")
+            slug = g.path.replace(" ", "-")
+            nav.append(f'<li><a href="#{slug}" data-cmd="{slug}" class="navcmd{" suggested" if g.path == suggested else ""}">'
+                       f'<span class="ntitle">{esc(g.title)}</span><span class="nstate s-{esc(tone)}">{state}</span></a></li>')
+            byname = {p.name: p for p in c.params}
+            primary = [byname[n] for n in g.primary if n in byname]
+            rest = [p for p in c.params if p.name not in g.primary]
+            label = lambda p: g.labels.get(p.name) or p.name.replace("_", " ").capitalize()
+            uses = "".join(f'<span class="use u-{USES[u][1]}">{USES[u][0]}</span>' for u in g.uses)
+            needs = "".join(f'<p class="need">Needs {esc(what)} first: run <a href="#{esc(by)}">{esc(titles.get(by, by))}</a>.</p>'
+                            for what, by in miss)
+            blocked = bool(miss) or bool(busy)
+            why = ("Another command is running: one at a time, they share the emulator." if busy and not miss else "")
+            panels.append(f"""<form class="cmdpanel" id="panel-{slug}" data-cmd="{esc(g.path)}" data-publishes="{1 if c.publishes else 0}" hidden>
+<p class="eyebrow">{esc(g.stage)}</p><h2>{esc(g.title)}</h2>
+<p class="what">{esc(g.what)}</p>
+<div class="uses">{uses}<span class="use u-cost">{esc(g.cost)}</span></div>
+{needs}
+{'<div class="fields">' + ''.join(_field(root, c, p, label(p)) for p in primary) + '</div>' if primary else ''}
+{f'<details class="more"><summary>More options ({len(rest)})</summary><div class="fields">' + ''.join(_field(root, c, p, label(p)) for p in rest) + '</div></details>' if rest else ''}
+{'<p class="danger">This pushes the branch and opens a pull request on GitHub: you will be asked to confirm.</p>' if c.publishes else ''}
+<div class="runbar"><button type="submit" class="run"{" disabled" if blocked else ""}>Run</button>
+<code class="preview"></code></div>{f'<p class="hint">{why}</p>' if why else ''}
+{f'<p class="hint">Last run: <a href="/job/{esc(j.id)}">{time.strftime("%d %b %H:%M", time.localtime(j.started))}</a> · {_jstatus(j.status)}</p>' if (j := last.get(g.path)) else ''}
+</form>""")
+    recent = "".join(f'<li><a href="/job/{esc(j.id)}"><span>{esc(titles.get(j.command, j.command))}</span>'
+                     f'{_jstatus(j.status)}<span class="hint">{time.strftime("%H:%M", time.localtime(j.started))} · {_dur(j)}</span></a></li>'
+                     for j in history[:8])
+    running = (f'<a class="busy" href="/job/{esc(busy.id)}"><span class="spin"></span>Running: '
+               f'<b>{esc(titles.get(busy.command, busy.command))}</b> · {esc(busy.status)} → open</a>') if busy else ""
+    return f"""<header class="top"><h1>Commands</h1><p class="meta">Pick a step on the left. Defaults are fine: just press Run.
+Suggested next: <a href="#{suggested.replace(' ', '-')}">{esc(titles.get(suggested, suggested))}</a>.</p>{running}</header>
+<div class="cmdlayout"><nav class="cmdnav"><ol>{''.join(nav)}</ol></nav>
+<div class="cmdmain">{''.join(panels)}
+<section class="panel recent"><h2>Recent jobs</h2>{'<ul>' + recent + '</ul>' if recent else '<p class="hint">None yet.</p>'}</section></div></div>
+<script>const SUGGESTED={json.dumps(suggested.replace(' ', '-'))};</script>"""
 
 
 def _jstatus(status: str) -> str:
@@ -801,15 +873,40 @@ pre{background:var(--sunken);border-radius:8px;padding:12px;overflow-x:auto;font
 details summary{cursor:pointer;list-style:none}details summary::-webkit-details-marker{display:none}details summary h2{display:inline}
 .lightbox{position:fixed;inset:0;background:rgba(10,14,18,.86);display:grid;place-items:center;z-index:9;padding:24px}
 .lightbox img{max-width:100%;max-height:92vh;border-radius:12px}.lightbox .close{position:absolute;top:12px;right:16px;font-size:30px;color:#fff;background:none;border:0;cursor:pointer}
-.cgroup{display:grid;gap:10px}.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
-.cmd{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:8px;align-content:start;min-width:0}
-.cmd-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.cmd-head h3 code{font-size:14px}
-button.run{font:600 13px var(--body);background:var(--accent);color:var(--bg);border:0;border-radius:7px;padding:6px 16px;cursor:pointer}
-button.run:disabled{opacity:.5;cursor:not-allowed}
-.fields{display:grid;gap:8px}.ffield{display:grid;gap:3px;font-size:13px}.ffield input,.ffield select{font:14px var(--body);padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:0}
-.fflag{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;align-items:center;font-size:13px}.fflag .fhelp{grid-column:2}
-.fhelp{color:var(--muted);font-size:12px}.preview{margin:0;background:var(--sunken);border-radius:6px;padding:6px 8px}.preview code{font-size:12px}
-.danger{color:var(--bad);font-size:13px;margin:0}.err{color:var(--bad);font-size:13px;margin:0}.busy{color:var(--warn);margin:4px 0 0;font-size:14px}
+.cmdlayout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}
+.cmdnav{position:sticky;top:20px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px}
+.cmdnav ol{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.cmdnav .stage{font:600 11px var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:10px 10px 4px}
+.navcmd{display:grid;gap:1px;padding:8px 10px;border-radius:8px;text-decoration:none;color:var(--fg);border:1px solid transparent}
+.navcmd:hover{background:var(--sunken)}.navcmd.on{background:var(--sunken);border-color:var(--accent)}
+.navcmd.suggested .ntitle::after{content:" · next";color:var(--accent);font-weight:600;font-size:12px}
+.ntitle{font-weight:500;font-size:14px}.nstate{font-size:12px;color:var(--muted)}
+.nstate.s-miss{color:var(--warn)}.nstate.s-done{color:var(--ok)}.nstate.s-failed{color:var(--bad)}.nstate.s-running,.nstate.s-waiting{color:var(--accent)}
+.cmdmain{display:grid;gap:16px;min-width:0}
+.cmdpanel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px 22px;display:grid;gap:14px;min-width:0}
+.cmdpanel h2{font-size:26px}.cmdpanel .eyebrow{margin:0}
+.what{margin:0;font-size:16px;max-width:70ch}
+.uses{display:flex;flex-wrap:wrap;gap:6px}.use{font-size:12px;border-radius:999px;padding:2px 10px;border:1px solid var(--line);color:var(--muted)}
+.u-dev{color:var(--accent);border-color:var(--accent)}.u-mod{color:#7a4fa8;border-color:#7a4fa8}.u-code{color:var(--warn);border-color:var(--warn)}
+.u-pub{color:var(--bad);border-color:var(--bad)}.u-cost{border-style:dashed}
+.need{margin:0;padding:8px 12px;border-radius:8px;background:var(--bad-soft);color:var(--bad);font-size:14px}
+.fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px 18px}
+.ffield{display:grid;gap:4px;font-size:13px;align-content:start}
+.ffield input,.ffield select{font:14px var(--body);padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);min-width:0;width:100%}
+.fflag{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;align-items:start;font-size:14px;align-content:start;padding-top:4px}
+.fflag input{margin-top:3px;width:16px;height:16px}.fflag .fhelp{grid-column:2}
+.flabel{font-weight:500}.flagname{font-size:11px;color:var(--muted);font-weight:400;margin-left:4px;white-space:nowrap}
+.fhelp{color:var(--muted);font-size:12px;line-height:1.4}
+details.more summary{cursor:pointer;color:var(--accent);font-size:14px;font-weight:500}details.more[open] summary{margin-bottom:12px}
+.runbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:14px}
+button.run{font:600 15px var(--body);background:var(--accent);color:var(--bg);border:0;border-radius:8px;padding:10px 28px;cursor:pointer}
+button.run:disabled{opacity:.45;cursor:not-allowed}
+.preview{font-size:12px;color:var(--muted);background:var(--sunken);border-radius:6px;padding:6px 10px;overflow-wrap:anywhere}
+.danger{color:var(--bad);font-size:13px;margin:0}.err{color:var(--bad);font-size:13px;margin:0}
+.busy{display:inline-flex;align-items:center;gap:8px;margin-top:8px;padding:8px 12px;border:1px solid var(--accent);border-radius:8px;text-decoration:none;color:var(--fg);font-size:14px;width:fit-content}
+.recent ul{list-style:none;margin:0;padding:0;display:grid;gap:4px}.recent a{display:flex;gap:10px;align-items:center;text-decoration:none;color:var(--fg);padding:6px 4px;border-bottom:1px solid var(--line)}
+.recent a span:first-child{flex:1}
+@media (max-width:900px){.cmdlayout{grid-template-columns:minmax(0,1fr)}.cmdnav{position:static}}
 .c-run{color:var(--accent)}.c-warn{color:var(--warn)}code.args{color:var(--muted)}
 .jobpill{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;border:1px solid var(--accent);border-radius:8px;text-decoration:none;color:var(--fg);font:12px var(--mono)}
 .jobpill b{margin-left:auto;font:600 11px var(--body);color:var(--accent)}
@@ -862,24 +959,32 @@ JOB_JS = r"""
 async function api(url, body){
   const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-DM-Token':TOKEN},body:JSON.stringify(body||{})});
   const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.statusText);return j}
-// Commands page: a live preview of the command line, and Run
-function values(form){const v={};form.querySelectorAll('input,select').forEach(i=>{v[i.name]=i.type==='checkbox'?i.checked:i.value});return v}
-function preview(form){const parts=['droid-monkey',form.dataset.cmd];const args=[];
-  form.querySelectorAll('input,select').forEach(i=>{const lab=i.closest('label').querySelector('code').textContent;
-    if(i.type==='checkbox'){const on=i.checked,def=i.closest('label').textContent.includes('on by default');
-      if(on&&!def)parts.push(lab);if(!on&&def)parts.push(lab.startsWith('--no-')?lab:lab)}
-    else if(i.value){if(lab===lab.toUpperCase())args.push(JSON.stringify(i.value));else parts.push(lab,i.value)}});
-  form.querySelector('.preview code').textContent=parts.concat(args).join(' ')}
-document.querySelectorAll('form.cmd').forEach(f=>{preview(f);f.addEventListener('input',()=>preview(f));
+// Commands page: one step at a time, a live preview of the exact command, and Run
+function values(form){const v={};form.querySelectorAll('input,select').forEach(i=>{if(i.name)v[i.name]=i.type==='checkbox'?i.checked:i.value});return v}
+function preview(form){const parts=['droid-monkey',form.dataset.cmd],args=[];
+  form.querySelectorAll('input,select').forEach(i=>{const f=i.closest('label')&&i.closest('label').querySelector('.flagname');if(!f)return;
+    const flag=f.textContent;
+    if(i.type==='checkbox'){if(i.checked!==i.defaultChecked)parts.push(i.checked?flag:(flag.startsWith('--')?flag.replace(/^--(?!no-)/,'--no-'):flag))}
+    else if(i.value&&!(i.tagName==='SELECT'&&i.querySelector('option[selected]')&&i.value===i.querySelector('option[selected]').value)){
+      if(flag===flag.toUpperCase())args.push(/\s/.test(i.value)?JSON.stringify(i.value):i.value);else parts.push(flag,i.value)}});
+  const pv=form.querySelector('.preview');if(pv)pv.textContent=parts.concat(args).join(' ')}
+const panels=[...document.querySelectorAll('form.cmdpanel')];
+function show(){if(!panels.length)return;let id=location.hash.slice(1)||SUGGESTED;
+  if(!document.getElementById('panel-'+id))id=panels[0].id.slice(6);
+  panels.forEach(f=>f.hidden=f.id!=='panel-'+id);
+  document.querySelectorAll('.navcmd').forEach(a=>a.classList.toggle('on',a.dataset.cmd===id))}
+window.addEventListener('hashchange',()=>{show();const p=document.querySelector('form.cmdpanel:not([hidden])');
+  if(p&&innerWidth<900)p.scrollIntoView({block:'start'})});show();
+panels.forEach(f=>{preview(f);f.addEventListener('input',()=>preview(f));f.addEventListener('change',()=>preview(f));
   f.addEventListener('submit',async e=>{e.preventDefault();const b=f.querySelector('button.run');
     let confirm=false;
     if(f.dataset.publishes==='1'){
       if(!f.querySelector('.confirm')){const c=document.createElement('p');c.className='confirm danger';
-        c.innerHTML='This pushes to GitHub and opens a pull request. Click <b>Run</b> again to confirm.';f.append(c);return}
+        c.innerHTML='This pushes to GitHub and opens a pull request. Press <b>Run</b> again to confirm.';b.parentNode.after(c);return}
       confirm=true}
     b.disabled=true;b.textContent='Starting…';
     try{const j=await api('/api/jobs',{command:f.dataset.cmd,values:values(f),confirm});location.href='/job/'+j.id}
-    catch(err){b.disabled=false;b.textContent='Run';let m=f.querySelector('.err');if(!m){m=document.createElement('p');m.className='err';f.append(m)}m.textContent=err.message}})});
+    catch(err){b.disabled=false;b.textContent='Run';let m=f.querySelector('.err');if(!m){m=document.createElement('p');m.className='err';b.parentNode.after(m)}m.textContent=err.message}})});
 // Job page: stream the output, show the question, answer it, stop
 if(typeof JOB!=='undefined'){
   const con=document.getElementById('console'),ask=document.getElementById('ask'),q=document.getElementById('question'),
