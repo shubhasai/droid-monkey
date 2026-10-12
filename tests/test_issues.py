@@ -49,3 +49,18 @@ def test_fix_and_run_buttons_build_valid_commands():
     cmds = jobs.commands()
     assert jobs.argv(cmds["fix"], {"issue_id": "abc123"}) == ["fix", "abc123"]
     assert jobs.argv(cmds["run"], {"only": "low_memory_on_detailscreen"}) == ["run", "--attacks", "low_memory_on_detailscreen"]
+
+
+def test_an_attack_named_in_an_older_report_still_runs():
+    from droid_monkey import scenarios, specs
+    from droid_monkey.explorer import ActionInfo, ScreenInfo, ScreenMap
+    smap = ScreenMap(package="com.ex", screens={
+        "shop": ScreenInfo(id="shop", path=[], title="Shop", fields=[], fingerprint=[]),
+        "detail": ScreenInfo(id="detail", path=["tap p1"], title="Detail", fields=[], fingerprint=[]),
+        "checkout": ScreenInfo(id="checkout", path=["tap p1", "tap buy"], title="Checkout", fields=["name"], fingerprint=[],
+                               actions=[ActionInfo(selector="buy", label="Buy", group="", effect="new_screen", settle_seconds=2)])})
+    known = specs.Known(screens=set(smap.screens), permissions=set(), selectors=set())
+    a = scenarios.named_attack(smap, known, "low_memory_on_detail")
+    assert a and a["screen"] == "detail" and a["spec"].screen == "detail" and a["spec"].name == "low_memory_on_detail"
+    assert scenarios.named_attack(smap, known, "low_memory")["base"] == "low_memory"
+    assert scenarios.named_attack(smap, known, "no_such_attack") is None

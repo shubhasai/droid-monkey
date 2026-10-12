@@ -161,6 +161,18 @@ class Loop:
             items.append({"name": name, "base": name, "reason": spec.description, "spec_yaml": spec.to_yaml()})
         if self.only:  # an attack's own name selects it on every screen it runs on
             items = [i for i in items if i["name"] in self.only or i["base"] in self.only]
+            for name in self.only:  # a name from an older report: that attack on that screen, if the map has it
+                if not any(i["name"] == name or i["base"] == name for i in items):
+                    a = scenarios_mod.named_attack(self.smap, self.known, name)
+                    if a:
+                        items.append({"name": a["name"], "base": a["base"], "reason": a["reason"],
+                                      "spec_yaml": a["spec"].to_yaml()})
+            missing = [n for n in self.only if not any(i["name"] == n or i["base"] == n for i in items)]
+            if missing:
+                self.echo(f"plan: no attack named {', '.join(missing)} on the current screen map "
+                          "(re-explored since? see `droid-monkey attacks list`)")
+            if not items:
+                self.echo(f"plan: nothing to run: {', '.join(self.only)} matches no attack on the current screen map")
 
         listing = "\n".join(f"- {i['name']}: {i['reason']}" for i in items)
         signals = "\n".join(f"- {s.kind} at {s.file}:{s.line}" for s in self.profile.signals) or "- none"

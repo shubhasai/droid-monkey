@@ -136,3 +136,26 @@ def builtin_attacks(smap: ScreenMap, known, screens_per_attack: int = 2) -> list
             spec.name = attack_name(base, c.screen, rank)
             items.append({"name": spec.name, "base": base, "screen": c.screen, "reason": c.reason, "spec": spec})
     return items
+
+
+def named_attack(smap: ScreenMap, known, name: str) -> dict | None:
+    """A built-in attack by the name a report gave it, even when the current map ranks different screens first:
+    `low_memory_on_detailscreen` is low_memory on detailscreen, whatever the best screens are today."""
+    import re
+    from . import specs as specs_mod
+    templates = specs_mod.builtin_templates()
+    base = next((b for b in sorted(templates, key=len, reverse=True) if name == b or name.startswith(b + "_on_")), None)
+    if not base:
+        return None
+    wanted = name[len(base) + 4:] if name != base else None
+    norm = lambda x: re.sub(r"[^a-z0-9_]", "_", x.lower())
+    options = [c for c in generate(smap) if c.attack == base and (wanted is None or norm(c.screen) == wanted)]
+    for c in sorted(options, key=lambda c: -c.score):
+        try:
+            spec = specs_mod.render(templates[base], c.values(), known)
+        except specs_mod.SpecError:
+            continue
+        spec.name = name
+        return {"name": name, "base": base, "screen": c.screen, "reason": c.reason, "spec": spec}
+    return None
+
