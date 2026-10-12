@@ -88,16 +88,21 @@ class SpecRunner:
         before: dict[str, str] = {}
         fields_screen: frozenset[str] | None = None
         texts_before: set[str] | None = None
+        left_screen: frozenset[str] | None = None
         fault_shot = False
         for i, step in enumerate(spec.steps, 1):
             if "fault" in step:
                 if not fault_shot:  # what the user had on screen when the fault hit (e.g. the filled form)
                     fault_shot = True
+                    d.dismiss_interruption(ui.dump(d.adb))
                     try:
                         d.dir.mkdir(parents=True, exist_ok=True)
                         (d.dir / "fault.png").write_bytes(ui.screenshot(d.adb))
                     except AdbError as e:
                         d.notes.append(f"screenshot at the fault: {e}")
+                if left_screen is None:  # the screen the user was on when the first fault hit
+                    d.dismiss_interruption(ui.dump(d.adb))
+                    left_screen = ui.dump(d.adb).fingerprint(d.package)
                 if "keeps_fields" in spec.expect and not before:
                     before = d.fields()
                     fields_screen = ui.dump(d.adb).fingerprint(d.package)
@@ -123,7 +128,8 @@ class SpecRunner:
             return not a or len(a & b) / max(1, len(a | b)) >= 0.5
 
         end_fp = end_screen.fingerprint(d.package)
-        restored = same(start_screen.fingerprint(d.package), end_fp) if "returns_to_screen" in spec.expect else True
+        left = left_screen if left_screen is not None else start_screen.fingerprint(d.package)
+        restored = same(left, end_fp) if "returns_to_screen" in spec.expect else True
         if before and not crashes and "returns_to_screen" not in spec.expect and not same(fields_screen, end_fp):
             # The trigger moved the app to another screen (e.g. Save went back to the list): that is navigation,
             # not lost input, so the fields are not compared.

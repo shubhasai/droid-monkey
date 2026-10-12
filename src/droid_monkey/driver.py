@@ -155,8 +155,7 @@ class AppDriver:
             node = ui.wait_for(self.adb, selector, timeout=12)
             if node is None:
                 raise NavigationError(f"step '{step}': '{selector}' never appeared")
-            ui.tap(self.adb, node)
-            time.sleep(0.3)
+            self._focus(node)
             ui.type_text(self.adb, text)
             ui.hide_keyboard(self.adb)
             self.dismiss_interruption(ui.dump(self.adb))
@@ -208,8 +207,7 @@ class AppDriver:
                 if not visible:
                     break
                 node = visible[0]
-                ui.tap(self.adb, node)
-                time.sleep(0.3)
+                self._focus(node)
                 if node.text:
                     self.adb.shell("input keyevent 123")  # KEYCODE_MOVE_END: append to the existing value
                     ui.type_text(self.adb, self.EDIT_SUFFIX)
@@ -226,6 +224,15 @@ class AppDriver:
             ui._swipe(self.adb, scroller.bounds, up=True)
             if ui.dump(self.adb).xml == before and not progressed:
                 break
+
+    def _focus(self, node) -> None:
+        """Tap a field so typing goes into it. Focusing a field is what opens a keyboard's own sheets (Gboard's
+        stylus tutorial); close one and tap the field again, or the text would go to the sheet."""
+        ui.tap(self.adb, node)
+        time.sleep(0.4)
+        if self.dismiss_interruption(ui.dump(self.adb)):
+            ui.tap(self.adb, node)
+            time.sleep(0.3)
 
     def fields(self) -> dict[str, str]:
         return ui.collect_fields(self.adb, self.package)
@@ -254,6 +261,8 @@ class AppDriver:
         while time.time() - start < timeout:
             time.sleep(0.3)
             cur = ui.dump(self.adb)
+            if self.dismiss_interruption(cur):  # it can appear mid-wait, e.g. a keyboard opening on a restored field
+                cur = ui.dump(self.adb)
             busy = self.has_progress(cur)
             saw_progress |= busy
             if cur.content() == prev.content() and not busy:
@@ -298,8 +307,10 @@ class AppDriver:
         return logcat.read_crashes(self.adb, self.package)
 
     def snapshot(self, label: str) -> ui.Screen:
-        """Screen dump and screenshot saved as evidence."""
+        """Screen dump and screenshot saved as evidence (of the app, not of a keyboard sheet covering it)."""
         screen = ui.dump(self.adb)
+        if self.dismiss_interruption(screen):
+            screen = ui.dump(self.adb)
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / f"{label}.xml").write_text(screen.xml)
         try:

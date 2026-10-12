@@ -26,7 +26,9 @@ class Node:
 
     @property
     def editable(self) -> bool:
-        return "EditText" in self.cls
+        """A text field: EditText and its subclasses as they appear in dumps (SearchView's field is an
+        AutoCompleteTextView, Material's a TextInputEditText)."""
+        return any(k in self.cls for k in ("EditText", "AutoCompleteTextView"))
 
     @property
     def center(self) -> tuple[int, int]:

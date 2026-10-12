@@ -55,3 +55,9 @@ def test_form_labels_are_not_list_rows():
            f'<node class="android.widget.LinearLayout" package="{PKG}" bounds="[0,0][100,1000]">{labels}</node></node></hierarchy>')
     fp = ui.parse(xml).fingerprint(PKG)
     assert {"text:Name", "text:City"} <= fp
+
+
+def test_search_view_field_is_editable():
+    xml = (f'<hierarchy><node class="android.widget.AutoCompleteTextView" resource-id="{PKG}:id/search_src_text" '
+           f'text="" package="{PKG}" bounds="[0,0][100,50]" clickable="true"/></hierarchy>')
+    assert [n.rid for n in ui.parse(xml).editable_fields(PKG)] == [f"{PKG}:id/search_src_text"]
