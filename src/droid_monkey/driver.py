@@ -41,6 +41,10 @@ class NavigationError(AdbError):
     pass
 
 
+class OutwardActionRefused(NavigationError):
+    """A tap droid-monkey will not make: it would act on the app's live backend (see safety.py)."""
+
+
 @dataclass
 class Context:
     adb: Adb
@@ -69,8 +73,8 @@ class AppDriver:
         logcat.clear(self.adb)
         self.device.launch()
         self.device.set_rotation(0)  # Android 16 may restore the app's last orientation on launch
-        for step in self.cfg.entry_steps:
-            self.step(step)
+        for step in self.cfg.entry_steps:  # written by the developer (e.g. a test-account login): trusted
+            self.step(step, trusted=True)
 
     def target(self, screen_id: str) -> Target:
         found = self.ctx.targets.get(screen_id)
@@ -84,7 +88,27 @@ class AppDriver:
         if target.fill:
             self.fill_form()
 
-    def step(self, step: str) -> None:
+    def _guard(self, node, screen, trusted: bool) -> None:
+        """Refuse a tap that would act on the app's live backend (see safety.py)."""
+        from .safety import outward_reason
+        if trusted or not self.cfg.live_backend:
+            return
+        reason = outward_reason(node, screen, self.cfg.allow_actions)
+        if reason:
+            raise OutwardActionRefused(f"refused to tap {reason}: it would act on the app's live backend (an account, a post, "
+                                "a payment). Set live_backend: false or allow_actions in monkey.yaml for a test backend.")
+
+    def _find(self, selector: str, timeout: float):
+        """Wait for an element; returns (node, the screen it was found on) or (None, None)."""
+        deadline = time.time() + timeout
+        while True:
+            screen = ui.dump(self.adb)
+            node = screen.find(selector)
+            if node or time.time() >= deadline:
+                return node, (screen if node else None)
+            time.sleep(0.3)
+
+    def step(self, step: str, trusted: bool = False) -> None:
         """One replayable step.
 
         `tap <selector>`, `tap? <selector>` (only if present), `wait <selector>`, `type <selector>=<text>`,
@@ -95,13 +119,19 @@ class AppDriver:
         if verb in ("tap", "tap?") and arg.startswith("at:"):
             self.settle(timeout=5)  # no element to wait for: at least let animations finish
             x, y = arg[3:].split(",")
+            screen = ui.dump(self.adb)
+            hit = [n for n in screen.app_nodes(self.package) if n.area and n.bounds[0] <= int(x) <= n.bounds[2]
+                   and n.bounds[1] <= int(y) <= n.bounds[3]]
+            if hit:
+                self._guard(min(hit, key=lambda n: n.area), screen, trusted)
             self.adb.shell(f"input tap {x} {y}")
         elif verb in ("tap", "tap?"):
-            node = ui.wait_for(self.adb, arg, timeout=8 if verb == "tap?" else 12)
+            node, screen = self._find(arg, timeout=8 if verb == "tap?" else 12)
             if node is None:
                 if verb == "tap?":
                     return
                 raise NavigationError(f"step '{step}': '{arg}' never appeared")
+            self._guard(node, screen, trusted)
             ui.tap(self.adb, node)
         elif verb == "wait":
             if ui.wait_for(self.adb, arg, timeout=12) is None:

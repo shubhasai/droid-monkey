@@ -168,7 +168,18 @@ class GraphRecorder:
         action = ActionInfo(selector=selector, label=self._label(before, node), group=_group(node))
         granted_before = self.ctx.device.runtime_permissions()
         logcat.clear(self.ctx.adb)
-        self.run_step(replay_step(node, selector))
+        from .driver import OutwardActionRefused
+        try:
+            self.run_step(replay_step(node, selector))
+        except OutwardActionRefused as e:
+            action.effect = "blocked"  # recorded, so no attack ever uses it as a trigger
+            if from_sid:
+                self.tried.setdefault(from_sid, set()).add(selector)
+                info = self.map.screens[from_sid]
+                info.actions = [a for a in info.actions if a.selector != selector] + [action]
+                self.save()
+            return (f"NOT TAPPED: droid-monkey {e} Do not try to reach this action another way. Record this screen "
+                    "if it is new, then explore elsewhere.")
         after, seconds, progress = self.d.settle()
         action.settle_seconds = round(max(0.0, seconds - self.baseline), 1)
         action.showed_progress = progress

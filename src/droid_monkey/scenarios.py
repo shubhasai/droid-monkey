@@ -49,6 +49,8 @@ def generate(smap: ScreenMap) -> list[Candidate]:
             out.append(Candidate("rotation", s.id, None, 0, 50 + len(s.fields),
                                  f"'{s.title}' form must keep {len(s.fields)} fields across recreation"))
         for a in s.actions:
+            if a.effect == "blocked":
+                continue
             if a.showed_progress or a.settle_seconds >= 1.5:
                 out.append(Candidate("rotation", s.id, a.selector, a.settle_seconds,
                                      60 + a.settle_seconds,  # in-flight work outranks forms: callbacks into a dead screen
@@ -56,7 +58,7 @@ def generate(smap: ScreenMap) -> list[Candidate]:
                                      "recreates the Activity under it"))
 
         for a in s.actions:
-            if a.effect in ("crash", "left_app", "permission"):
+            if a.effect in ("crash", "left_app", "permission", "blocked"):
                 continue
             score = (6 if s.has_form else 0) + (4 if a.showed_progress else 0) + min(a.settle_seconds, 5)
             if score >= 4:
@@ -78,7 +80,7 @@ def generate(smap: ScreenMap) -> list[Candidate]:
                              + (" (it runs background work that can hold on to them)" if busy else "")))
 
         # Performance: the slowest thing a user can do on the screen, under CPU load; lists scroll too.
-        usable = [a for a in s.actions if a.effect not in ("crash", "left_app", "permission", "not_found")]
+        usable = [a for a in s.actions if a.effect not in ("crash", "left_app", "permission", "not_found", "blocked")]
         slow = max(usable, key=lambda a: (a.showed_progress, a.settle_seconds), default=None)
         work = slow.settle_seconds if slow else 0
         out.append(Candidate("performance", s.id, slow.selector if slow else None, work,

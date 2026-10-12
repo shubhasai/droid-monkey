@@ -31,6 +31,8 @@ class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     agent: str = "auto"              # coding agent: auto | claude | codex | api (see agents.py)
     screens_per_attack: int = 2      # each built-in attack runs on this many of its best screens
+    live_backend: bool = True        # false only for a test or fake backend: then sign-up, publish, pay... may be tapped
+    allow_actions: list[str] = field(default_factory=list)  # labels that are safe to tap even on the live backend
     agent_model: str | None = None   # optional model for that agent
 
 
@@ -51,5 +53,7 @@ def load(app_dir: Path) -> AppConfig:
         llm=LLMConfig.from_dict(raw.get("llm")),
         agent=str(raw.get("agent") or "auto"),
         screens_per_attack=int(raw.get("screens_per_attack") or 2),
+        live_backend=raw.get("live_backend", True) is not False,
+        allow_actions=[str(a) for a in (raw.get("allow_actions") or [])],
         agent_model=raw.get("agent_model"),
     )

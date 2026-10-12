@@ -48,7 +48,10 @@ Work in this order:
 
 Only record the app's own screens: system permission prompts and other apps are not screens (answer prompts with
 allow_permission / deny_permission). An app dialog that blocks the screen (e.g. a popup with OK) is worth recording.
-Rules: never type real personal data; use obvious test values. Do not leave the app on purpose. A crash is a finding,
+Rules: this may be a real app talking to its real backend. Never create an account, sign up, log in, publish or
+submit content, post, send a message, pay, buy, donate or delete anything: those act on the real world. Explore the
+screens leading up to such an action and record them, but stop before the final button. droid-monkey refuses those
+taps anyway; if a tap comes back NOT TAPPED, move on. Never type real personal data; use obvious test values. Do not leave the app on purpose. A crash is a finding,
 not a failure: it is recorded automatically, so relaunch and continue. Keep going until the checklist is covered."""
 
 
