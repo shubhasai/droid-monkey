@@ -13,6 +13,9 @@ from .tools.device import Device
 
 # Sample values for form filling, matched against a field's resource-id (lowercased).
 DEFAULT_FILL = [
+    ("search", "Android"),
+    ("query", "Android"),
+    ("find", "Android"),
     ("email", "ravi@example.com"),
     ("mail", "ravi@example.com"),
     ("phone", "9876543210"),
@@ -157,6 +160,8 @@ class AppDriver:
             self.fill_form()
         elif verb == "back":
             self.adb.shell("input keyevent 4")
+        elif verb == "enter":  # the keyboard's Enter/Search key: how Android search boxes submit
+            self.adb.shell("input keyevent 66")
         elif verb == "sleep":
             time.sleep(float(arg))
         else:

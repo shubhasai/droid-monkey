@@ -275,6 +275,8 @@ class Explorer:
             path.append(action.dialog_dismiss)
         new_sid = self.register(after, path)
         action.to_screen = new_sid
+        if new_sid != info.id:
+            self.map.edges.append({"from": info.id, "to": new_sid, "action": action.label})
         if action.effect != "dialog":
             action.effect = "new_screen"
         return new_sid

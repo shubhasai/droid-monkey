@@ -247,9 +247,9 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
 
 @main.command()
 @APP_DIR
-@click.option("--mode", type=click.Choice(["agent", "claude", "jev", "manual", "rules"]), default="agent", show_default=True,
-              help="agent: the coding agent reads the code and drives the app (screens + files). jev: fast, "
-                   "TypeSafe's Jev ranks each screen's elements toward the analysed flows (needs TYPESAFE_API_KEY). "
+@click.option("--mode", type=click.Choice(["agent", "claude", "fast", "manual", "rules"]), default="agent", show_default=True,
+              help="agent: the coding agent reads the code and drives the app (screens + files). fast: no model, "
+                   "depth first with fast screen reads, types into fields, explore_breadth elements per screen. "
                    "manual: you drive the app on the emulator and droid-monkey records the screens and paths. "
                    "rules: free tap-everything exploration without a model. (claude is the old name for agent.)")
 @click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for agent mode.")
@@ -275,21 +275,13 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
         if rec.outward_steps:
             theme.warn(f"{len(rec.outward_steps)} step(s) act on the live backend ({', '.join(rec.outward_steps[:3])}); "
                        "attacks will not replay them unless monkey.yaml allows those actions")
-    elif mode == "jev":
-        from .designer import load_flows
-        from .jev_explore import JevExplorer
-        from .tracing import load_keys
-        load_keys()
-        explorer = JevExplorer(ctx, load_flows(ctx.cfg.app_dir), save_path=paths.partial_map_path(ctx.cfg.app_dir))
-        if explorer.jev is None:  # asked for Jev: never fall back silently
-            raise click.ClickException("Jev is not available: " + "; ".join(explorer.notes)
-                                       + ". Add TYPESAFE_API_KEY to ~/.droid-monkey/.env; if it is there, reinstall "
-                                         "droid-monkey so typesafe-sdk is installed.")
+    elif mode == "fast":
+        from .fast_explore import FastExplorer
         from .tools import ui
+        explorer = FastExplorer(ctx, save_path=paths.partial_map_path(ctx.cfg.app_dir))
         ui.dump(ctx.adb)
-        theme.kv("jev", "on (TypeSafe jev-latest ranks each screen)")
         theme.kv("screen reads", "fast (uiautomator2)" if ui._FAST else "classic uiautomator (slow): pip install uiautomator2")
-        with theme.working("swinging through your screens (Jev picks each next tap)..."):
+        with theme.working("swinging through your screens..."):
             smap = explorer.explore()
         smap.save(_map_path(ctx))
         for note in explorer.notes:
