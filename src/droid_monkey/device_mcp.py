@@ -68,12 +68,26 @@ class GraphRecorder:
         self.map.baseline_seconds = self.baseline
         self.map.save(self.out)
 
-    def match(self, screen: ui.Screen) -> str | None:
+    def activity(self) -> str:
+        try:
+            return ui.top_activity(self.ctx.adb)
+        except AdbError:
+            return ""
+
+    def match(self, screen: ui.Screen, activity: str | None = None) -> str | None:
+        """The recorded screen this one is: same Activity (when known) and a similar structure. Content (list rows,
+        web pages) is not part of the structure, so a second article or a scrolled feed matches the first."""
         fp = screen.fingerprint(self.package)
+        act = self.activity() if activity is None else activity
+        best, score = None, 0.0
         for sid, info in self.map.screens.items():
-            if _similar(fp, frozenset(info.fingerprint)):
-                return sid
-        return None
+            if act and info.activity and act != info.activity:
+                continue
+            fp2 = frozenset(info.fingerprint)
+            s = len(fp & fp2) / max(1, len(fp | fp2)) if (fp or fp2) else 1.0
+            if s > score:
+                best, score = sid, s
+        return best if best is not None and score >= 0.6 else None
 
     def _label(self, screen: ui.Screen, node: ui.Node) -> str:
         if node.text or node.desc:
@@ -269,10 +283,17 @@ class GraphRecorder:
         fg = screen.foreground_package()
         if fg and fg != self.package:
             return f"not recorded: {fg} is another app, not part of this app. Use back or launch_fresh."
-        existing = self.match(screen)
+        act = self.activity()
+        existing = self.match(screen, act)
         if existing:
             self.set_current(existing)
-            return f"this screen is already recorded as '{existing}'"
+            return (f"duplicate, not recorded: this is '{existing}' (same screen, different content). Move on to the "
+                    "next unreached checklist screen.")
+        same_name = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        if same_name in self.map.screens and self.map.screens[same_name].activity in ("", act):
+            self.set_current(same_name)
+            return (f"duplicate, not recorded: '{same_name}' is already recorded under that name. If this really is "
+                    "a different screen, record it under a more specific name; otherwise move on.")
         if self.max_screens and len(self.map.screens) >= self.max_screens:
             return f"not recorded: {self.max_screens} screens is the limit for this run. Call finish now."
         sid = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or f"screen_{len(self.map.screens) + 1}"
@@ -291,6 +312,7 @@ class GraphRecorder:
         self.map.screens[sid] = ScreenInfo(
             id=sid, path=self.path_to(parent), title=name, fields=fields,
             fingerprint=sorted(screen.fingerprint(self.package)), description=description, files=found,
+            activity=act,
         )
         self.interactive[sid] = {_selector(n, screen) for n in screen.app_nodes(self.package)
                                  if n.area and (n.clickable or n.editable)}

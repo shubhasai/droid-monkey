@@ -22,6 +22,7 @@ class Node:
     clickable: bool
     scrollable: bool
     focused: bool
+    content: bool = False  # inside a list row or a web page: data, which says nothing about which screen this is
 
     @property
     def editable(self) -> bool:
@@ -76,21 +77,23 @@ class Screen:
         return [n for n in self.app_nodes(package) if n.editable and n.area > 0]
 
     def fingerprint(self, package: str) -> frozenset[str]:
-        """Which screen this is, from what identifies it to a person: resource ids, content descriptions (icon
-        labels), button texts and short static texts such as the top bar title. Typed field values are ignored,
-        so a filled form and an empty one are the same screen. Apps without test tags have almost no resource
-        ids, and class names alone make every screen look alike, so the labels carry the identity there."""
+        """Which screen this is, from its structure rather than its content: resource ids, content descriptions
+        (icon labels), input fields, and the fixed texts outside lists and web pages, such as the top bar title and
+        button labels. Text inside list rows and web pages is data (article titles, feed cards, search results), so
+        two articles or the feed on two days are the same screen. Typed values are ignored too, so a filled form
+        and an empty one are the same screen. Apps without test tags have almost no resource ids, and class names
+        alone make every screen look alike, so the fixed labels carry the identity there."""
         tokens = set()
         for n in self.app_nodes(package):
             if n.area == 0:
                 continue
             if n.rid:
                 tokens.add(f"id:{n.rid}")
-            if n.desc:
+            if n.desc and not n.content:
                 tokens.add(f"desc:{n.desc[:40]}")
             if n.editable:
                 tokens.add(f"edit:{n.rid or n.cls}")
-            elif n.text and (n.clickable or len(n.text) <= 30):
+            elif n.text and not n.content and (n.clickable or len(n.text) <= 30):
                 tokens.add(f"text:{n.text[:30]}")
         return frozenset(tokens or {n.cls for n in self.app_nodes(package)})
 
@@ -108,8 +111,33 @@ class Screen:
         return next((n.package for n in self.nodes if n.package and n.package != "com.android.systemui"), "")
 
 
+def _rows(el: ET.Element) -> list[ET.Element]:
+    """The repeated rows of a scrolling container: children (looking through up to two single-child wrappers)
+    of which at least two share a shape (class and resource id) and are items, i.e. tappable or holding other
+    views. A RecyclerView's items, a LazyColumn's items; not a form's plain text labels."""
+    for _ in range(3):
+        all_kids = el.findall("node")
+        kids = [k for k in all_kids if k.get("clickable") == "true" or k.find("node") is not None]
+        shapes: dict[tuple, int] = {}
+        for k in kids:
+            shape = (k.get("class", ""), k.get("resource-id", ""))
+            shapes[shape] = shapes.get(shape, 0) + 1
+        rows = [k for k in kids if shapes[(k.get("class", ""), k.get("resource-id", ""))] >= 2]
+        if rows or len(all_kids) != 1:
+            return rows
+        el = all_kids[0]
+    return []
+
+
 def parse(xml: str) -> Screen:
     root = ET.fromstring(xml)
+    content: set[int] = set()  # ids of elements inside list rows or web pages
+    for el in root.iter("node"):
+        if "WebView" in el.get("class", ""):
+            content |= {id(d) for d in el.iter("node") if d is not el}
+        elif el.get("scrollable") == "true":
+            for row in _rows(el):
+                content |= {id(d) for d in row.iter("node")}
     nodes = []
     for el in root.iter("node"):
         m = _BOUNDS.match(el.get("bounds", ""))
@@ -118,9 +146,23 @@ def parse(xml: str) -> Screen:
             rid=el.get("resource-id", ""), cls=el.get("class", ""), text=el.get("text", ""),
             desc=el.get("content-desc", ""), package=el.get("package", ""), bounds=bounds,  # type: ignore[arg-type]
             clickable=el.get("clickable") == "true", scrollable=el.get("scrollable") == "true",
-            focused=el.get("focused") == "true",
+            focused=el.get("focused") == "true", content=id(el) in content,
         ))
     return Screen(xml=xml, nodes=nodes)
+
+
+_RESUMED = re.compile(r"(?:topResumedActivity|mResumedActivity|ResumedActivity)[:=]\s*ActivityRecord\{\S+ \S+ ([\w.]+)/([\w.$]+)")
+
+
+def top_activity(adb: Adb) -> str:
+    """The Activity in the foreground, as its short class name ('' if Android does not say)."""
+    out = adb.shell("dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity|ResumedActivity' | head -3",
+                    check=False)
+    m = _RESUMED.search(out)
+    if not m:
+        return ""
+    pkg, cls = m.groups()
+    return (pkg + cls if cls.startswith(".") else cls).rsplit(".", 1)[-1]
 
 
 # Fast screen reads: uiautomator2's on-device helper answers in ~30 ms, where `uiautomator dump` waits for the app

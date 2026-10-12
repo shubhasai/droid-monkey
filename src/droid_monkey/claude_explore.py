@@ -44,6 +44,8 @@ Work in this order:
    whose "near labels" you can see or reach in the fewest taps. On each new screen, call record_screen with its
    checklist name, one sentence on its purpose, and its files (the checklist's file, plus its ViewModel and the
    repositories it calls if you know them). Treat repeated list rows as one unless the code shows they differ.
+   A screen showing data (an article, a product, a search result, a profile) is ONE screen whatever it shows:
+   record the first one only. record_screen says "duplicate" when a screen is already recorded; then move on.
 3. Do not wander: skip cosmetic options (themes, font sizes, toggles) unless they open a checklist screen, and do
    not enumerate every order of taps. Fill forms with values that pass the app's validation, open menus, dialogs
    and tabs, scroll to find items below the fold, and answer permission prompts.

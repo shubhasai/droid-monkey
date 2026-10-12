@@ -44,6 +44,7 @@ class ScreenInfo:
     actions: list[ActionInfo] = field(default_factory=list)
     description: str = ""
     files: list[str] = field(default_factory=list)  # source files behind this screen (Claude-driven exploration)
+    activity: str = ""  # the foreground Activity when recorded: two screens in different Activities never match
 
     @property
     def has_form(self) -> bool:
