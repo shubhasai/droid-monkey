@@ -103,6 +103,11 @@ uv tool install git+https://github.com/shubhasai/droid-monkey
 | An Anthropic API key in `~/.droid-monkey/.env` as `DROID_MONKEY_API_KEY` | droid-monkey's own reasoning (plan, decide, diagnose, design), on Haiku 5.5 by default |
 | Optional: `gh` (logged in), [Entire](https://entire.io), a `NEATLOGS_API_KEY` | `pr`, checkpoints, tracing |
 
+**Why setup is quick:**
+- **Nothing to change in your app.** No SDK to add, no test code, no instrumentation. droid-monkey drives the app from the outside, through `adb`, and reads its source.
+- **One install command, one config command.** `droid-monkey init` finds the package and module, picks an AVD, and chooses a JDK that fits your Gradle version. It checks `adb`, the emulator, the coding agent and the keys, and says exactly what's missing. The result is a short `monkey.yaml` you can read.
+- **The same tool for any app.** The three apps below needed no special code: a demo shop, Google's architecture sample and the Wikipedia app.
+
 Keys live in `~/.droid-monkey/.env`. droid-monkey never exports them globally, and strips them from the coding agent's environment.
 
 Step by step, from an empty machine to the first run, with troubleshooting: **[SETUP.md](SETUP.md)**.
@@ -177,7 +182,7 @@ test backend: then sign-up, posting and paying stay refused even while signed in
 ## Results
 
 ### architecture-samples (Google): one real bug, three approaches
-Same base commit. The fix of each approach was judged the same way, by droid-monkey's device replay.
+[android/architecture-samples](https://github.com/android/architecture-samples) is Google's reference app for Android architecture (Compose, ViewModels, Hilt). droid-monkey found a real process-death bug in it: a half-typed new task is lost when the OS kills the app in the background. It then fixed it three ways, from the same base commit. The fix of each approach was judged the same way, by droid-monkey's device replay.
 
 | | Plain Claude Code (generic prompt, no droid-monkey) | droid-monkey, no diagnosis | **droid-monkey** |
 |---|---|---|---|
@@ -199,6 +204,13 @@ Same 4 attacks, same base. Each version fixed a weakness found in the previous v
 | v3, + compile tool | 4/4 (1 retry) | 743k | $1.78 | 11.1 min |
 | **v4, + JVM-first test plans** | **4/4, all first try** | **498k** | **$1.27** | 8.8 min |
 
+What each version added, and what it bought:
+- **v1 → v2, diagnosis.** The coder gets the root cause from the code and the device evidence (crash, logcat, Perfetto, leak counts) instead of only "it failed". The fixes became specific: compare v1's commit `fix(rotation): survive rotation` with v4's `fix(rotation): tie deal popup coroutine to lifecycle, not GlobalScope`.
+- **v2 → v3, a compile tool.** The coder can build the module before it finishes, so broken fixes don't reach the device.
+- **v3 → v4, JVM-first test plans.** The diagnosis plans a JVM regression test where possible, instead of a slow instrumented one. Every fix then passed on the first try.
+
+From v2 to v4: **37% fewer coder tokens (793k → 498k), 39% lower cost ($2.09 → $1.27), 23% faster (11.4 → 8.8 min), no retries.**
+
 To be clear about what this shows: on a small app with textbook bugs, plain Claude Code fixes everything by reading code, and does it faster. droid-monkey's value is the part reading can't do:
 - finding which faults actually break the app;
 - reproducing them on a running device;
@@ -206,6 +218,19 @@ To be clear about what this shows: on a small app with textbook bugs, plain Clau
 - the evidence trail.
 
 Its advantage grows on bigger codebases and on bugs with no stack trace. All results are single runs.
+
+### Wikipedia: a large real app, and the UX audit
+The [Wikipedia Android app](https://github.com/wikimedia/apps-android-wikipedia) is a large production codebase. droid-monkey mapped **40 screens** from its code and the device, without any changes to the app. It then ran `droid-monkey ux` on it ($1.17, Sonnet 5.5). The audit combines three kinds of evidence:
+
+- **Predicted attention heatmaps** for every screen. A saliency model (spectral residual) is combined with a prior from the UI structure, and each screen gets a heatmap plus the share of attention each control is likely to get. Five screens were flagged where the main action loses to something else. On the first onboarding screen, "Learn more about Wikipedia" is predicted to draw **16× the attention of the Forward button (18% vs 1%)**. On the interests screen, **Next ranks 7th of 8 controls**.
+- **Measured waits** on every route, against Nielsen's limits (0.1 s instant, 1 s keeps the flow, 10 s loses attention). Cold start was 1.59 s; 8 steps broke the flow, for example opening a file page took 2.3 s.
+- **What was observed versus suspected.** There are **9 findings: 7 seen on the device, 2 suspected from the code only**, and the two are labelled differently. The top one, rated high, is real: a Year in Review promo covers an article the user has just opened.
+
+| First onboarding screen: the eye goes to the headline and "Learn more", not Forward | Interests: Next ranks 7th of 8 |
+|---|---|
+| <img src="docs/img/wikipedia-heatmap-onboarding.jpg" width="300" alt="Predicted attention heatmap of Wikipedia's first onboarding screen"> | <img src="docs/img/wikipedia-heatmap-interests.jpg" width="300" alt="Predicted attention heatmap of Wikipedia's interests screen"> |
+
+The heatmaps are predictions, not eye tracking, and each finding says whether it is observed or suspected. The attacks also found a real leak in Wikipedia: `YearInReviewOnboardingActivity` instances stay alive after a forced GC (1 → 3).
 
 ### Performance, memory and startup
 These were checked on bugs planted on a scratch branch, plus both apps as they are:
@@ -217,6 +242,16 @@ These were checked on bugs planted on a scratch branch, plus both apps as they a
 | 5.5 s busy loop in `onCreate` | `slow_start`: cold start median 5946 ms | `performCreate` running for 5525 ms; pointed to the loop |
 
 No false alarms on either app as it is.
+
+## How a fix is made
+
+1. **Diagnose.** The diagnoser reads the failure's evidence: the crash, logcat, the Perfetto main-thread timeline, leak counts and screenshots. It also reads the app's code, through code search and **Entire's code graph** (`entire graph search` finds the symbols, callers and covering tests). It returns the root cause with `file:line`, the files to change and a regression-test plan.
+2. **Ask.** droid-monkey shows you the diagnosis and the evidence and asks **"Fix it?"**, in the terminal or with a button on the dashboard. Nothing changes without a yes, unless you pass `--auto-fix`.
+3. **Fix.** The coding agent, Claude Code by default, works on a `droid-monkey/run-…` or `droid-monkey/fix-…` branch, never yours. It has only read and edit tools, plus a compile tool. Only its edits under `app/src` are kept.
+4. **Verify.** droid-monkey rebuilds the app, **replays the identical attack** and runs the regression test. The fix is committed only if both pass. If not, the failure goes back into a revised diagnosis (at most 2 attempts), and if it still fails the sources are restored.
+5. **Commit and PR.** The commit message carries the root cause, the fix and the evidence. **Entire records the Claude Code session that wrote it, and the commit gets an `Entire-Checkpoint` trailer.** `droid-monkey pr` opens a pull request with the before/after evidence table, for example [MonkeyMart PR #2](https://github.com/shubhasai/MonkeyMart/pull/2).
+
+**What Entire adds:** open the commit on entire.io to see the session behind the fix: the brief droid-monkey gave the agent, the diagnosis, every step, the tokens and the diff. That answers "why did this line change, and who changed it" for code written by an agent. The checkpoints are pushed with the repo: 32 on MonkeyMart, and the sessions that built droid-monkey itself. Details: [evidence/entire.md](evidence/entire.md).
 
 ## Tracing and checkpoints
 
