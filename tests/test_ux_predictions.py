@@ -70,3 +70,26 @@ def test_code_only_findings_are_suspected_and_low():
     g = check_observed(Finding(id="y", title="t", flow="f", screens=["home"], problem="p",
                                evidence=["home: the Next button is 32 dp"], why="w", change="c", files=[]))
     assert g.observed and g.severity == "medium"
+
+
+def test_report_embeds_each_image_once_and_marks_suspected(tmp_path, monkeypatch):
+    from droid_monkey import paths, ux_report
+    base = tmp_path / ".droid-monkey"
+    (base / "screens").mkdir(parents=True)
+    (base / "attention").mkdir()
+    png, _ = _screen(tmp_path, "#d11a2a")
+    for d in ("screens/home.png", "attention/home.jpg"):
+        Image.open(png).convert("RGB").save(base / d)
+    monkeypatch.setattr(paths, "data_dir", lambda app_dir: base)
+    seen = Finding(id="a", title="Primary action easy to miss", flow="f", screens=["home"], problem="p",
+                   evidence=["home: predicted attention puts Next at 2%", "home: the step took 1.4s"], why="w",
+                   change="c", files=["app/src/main/Home.kt"], severity="high")
+    sus = check_observed(Finding(id="b", title="State lost", flow="f", screens=[], problem="p",
+                                 evidence=["Code, Edit.kt:12: resets"], why="w", change="c", files=[]))
+    att, _ = attention.predict(png, _screen(tmp_path, "#d11a2a")[1], PKG, "home")
+    page = ux_report.render(tmp_path, PKG, [seen, sus], {"model": "m", "cost_usd": 0.5}, {"home": att},
+                            {"routes": {}, "slow_list": [{"label": "Open", "to_screen": "home", "from_screen": "home",
+                                                          "seconds": 1.4, "band": "breaks flow"}]})
+    assert page.count("data:image/jpeg;base64,") == 2          # the screenshot and the heatmap, once each
+    assert 'data-img="#img0"' in page and "Suspected in code, not observed (1)" in page
+    assert "predicted attention" in page and "measured" in page and "1.4s" in page

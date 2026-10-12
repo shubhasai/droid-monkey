@@ -329,54 +329,9 @@ def write_report(app_dir: Path, findings: list[Finding], usage: dict, attention:
 
 
 def write_html(app_dir: Path, findings: list[Finding], usage: dict, attention: dict, waits: dict) -> Path:
-    """ux-audit.html: findings, then every screen's predicted-attention heatmap with its controls' shares."""
-    import html
-    from . import attention as att_mod
-    e = html.escape
+    from . import ux_report
     out = paths.data_dir(app_dir) / "ux-audit.html"
-    base = paths.data_dir(app_dir)
-
-    def card(f: Finding) -> str:
-        shots = "".join(f'<img src="{e(str((base / "attention" / (s + ".jpg")).relative_to(base)))}" alt="{e(s)}">'
-                        for s in f.screens[:3] if (base / "attention" / f"{s}.jpg").exists())
-        return (f'<article class="f {e(f.severity)}"><h3>{e(f.title)}</h3><p class="meta">{e(f.severity)} · {e(f.kind)}'
-                f' · {e(f.flow)}</p><p>{e(f.problem)}</p><ul>' + "".join(f"<li>{e(x)}</li>" for x in f.evidence)
-                + f'</ul><p><b>Change.</b> {e(f.change)}</p>' + (f'<p class="note">{e(f.note)}</p>' if f.note else "")
-                + (f'<div class="shots">{shots}</div>' if shots else "") + "</article>")
-
-    screens = []
-    for sid, a in attention.items():
-        rows = "".join(f"<tr{' class=\"p\"' if el.label == a.primary else ''}><td>{e(el.label[:40])}</td>"
-                       f"<td>{el.share:.0%}</td></tr>" for el in a.elements[:6])
-        fl = "".join(f'<p class="flag">{e(x)}</p>' for x in att_mod.flags(a))
-        screens.append(f'<figure><img src="attention/{e(sid)}.jpg" alt="{e(sid)}"><figcaption><b>{e(sid)}</b>{fl}'
-                       f'<table>{rows}</table></figcaption></figure>')
-    waits_html = "".join(f"<li>{e(x)}</li>" for x in waits.get("slow_steps", [])) or "<li>no step over 1 s</li>"
-    seen = [f for f in findings if f.observed]
-    suspected = [f for f in findings if not f.observed]
-    doc = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>UX audit</title><style>
-:root{{--bg:#f7f6f2;--fg:#1d1d1b;--mute:#6b6a65;--card:#fff;--line:#e3e1da;--hi:#c2410c;--md:#b45309;--lo:#4b5563}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#151513;--fg:#ecebe6;--mute:#9b9a94;--card:#1f1f1c;--line:#33322e}}}}
-body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;margin:0;padding:24px 16px}}
-main{{max-width:1180px;margin:auto}} h1{{margin:0 0 4px}} .sub,.meta,.note{{color:var(--mute)}}
-.f{{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--lo);border-radius:8px;padding:12px 16px;margin:12px 0}}
-.f.high{{border-left-color:var(--hi)}} .f.medium{{border-left-color:var(--md)}} .f h3{{margin:0}}
-.shots{{display:flex;gap:8px;flex-wrap:wrap}} .shots img{{width:160px;border-radius:6px}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px}}
-figure{{margin:0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px}}
-figure img{{width:100%;border-radius:6px}} table{{width:100%;font-size:13px;border-collapse:collapse}}
-td{{padding:2px 4px;border-top:1px solid var(--line)}} td+td{{text-align:right;font-variant-numeric:tabular-nums}}
-tr.p td{{font-weight:600}} .flag{{color:var(--hi);font-size:13px;margin:4px 0}}
-</style></head><body><main>
-<h1>UX audit</h1><p class="sub">{len(seen)} findings on screens · {len(suspected)} suspected in code · review by {e(str(usage.get('model')))} · ${(usage.get('cost_usd') or 0):.2f}</p>
-<h2>Findings</h2>{''.join(card(f) for f in seen) or '<p>none</p>'}
-{('<h2>Suspected in code, not observed</h2><p class="sub">Seen in the code only, on screens nobody reached: an attack has to reproduce them.</p>' + ''.join(card(f) for f in suspected)) if suspected else ''}
-<h2>Waiting time</h2><p class="sub">Measured from tap to settled screen. Cold start {e(str(waits.get('cold_start_s') or 'not measured'))} s. 0.1 s feels instant, 1 s keeps the flow, 10 s loses attention.</p><ul>{waits_html}</ul>
-<p class="sub">{e(waits.get('benchmark', ''))}</p>
-<h2>Predicted attention</h2><p class="sub">A prediction from each screenshot and its UI structure, not eye tracking. The white box is the screen's likely primary action; shares are of the whole screen's predicted attention.</p>
-<div class="grid">{''.join(screens)}</div></main></body></html>"""
-    out.write_text(doc)
+    out.write_text(ux_report.render(app_dir, waits.get("package", ""), findings, usage, attention, waits))
     return out
 
 
@@ -474,8 +429,12 @@ def run_audit(ctx, smap: ScreenMap, flows: list[dict], analysis: str,
     attention = att_mod.audit(ctx.cfg.app_dir, smap.package, list(smap.screens),
                               paths.data_dir(ctx.cfg.app_dir) / "attention")
     waits = perf_impact.facts(ctx.cfg.app_dir, smap, flows)
+    report_extras = {  # for the HTML report only, kept out of the review prompt
+        "package": smap.package, "titles": {sid: s.title for sid, s in smap.screens.items()},
+        "routes": {sid: perf_impact.as_dict(r) for sid, r in perf_impact.routes(ctx.cfg.app_dir, smap).items()},
+        "slow_list": [{**perf_impact.asdict(st)} for _, st in perf_impact.slow_steps(ctx.cfg.app_dir, smap)]}
     findings, usage = review(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, smap, facts, flows, analysis,
                              model=review_model, attention={k: {**v.summary(), "flags": att_mod.flags(v)}
                                                             for k, v in attention.items()}, waits=waits)
     findings.sort(key=lambda f: (not f.observed, {"high": 0, "medium": 1, "low": 2}.get(f.severity, 3)))
-    return findings, usage, write_report(ctx.cfg.app_dir, findings, usage, attention, waits)
+    return findings, usage, write_report(ctx.cfg.app_dir, findings, usage, attention, {**waits, **report_extras})

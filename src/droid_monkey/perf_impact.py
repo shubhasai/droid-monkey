@@ -45,6 +45,8 @@ class Route:
 
 
 def band(seconds: float) -> str:
+    if seconds < 0:
+        return "not measured"
     if seconds < INSTANT_S:
         return "instant"
     if seconds < FLOW_S:
@@ -80,7 +82,7 @@ def routes(app_dir: Path, smap: ScreenMap) -> dict[str, Route]:
                 links.setdefault(sid, {}).setdefault(a.to_screen, (a.label, a.settle_seconds or 0.0))
     for e in smap.edges:  # links recorded without an action timing (e.g. by the agent explorer)
         if e.get("from") in smap.screens and e.get("to") in smap.screens:
-            links.setdefault(e["from"], {}).setdefault(e["to"], (e.get("action", ""), 0.0))
+            links.setdefault(e["from"], {}).setdefault(e["to"], (e.get("action", ""), -1.0))  # timing unknown
     queue = deque(roots)
     while queue:
         cur = queue.popleft()
@@ -90,7 +92,7 @@ def routes(app_dir: Path, smap: ScreenMap) -> dict[str, Route]:
             step = Step(label=str(label)[:50], to_screen=nxt, seconds=round(seconds, 2), band=band(seconds),
                         from_screen=cur)
             prev = out[cur]
-            out[nxt] = Route(screen=nxt, steps=prev.steps + [step], wait_s=round(prev.wait_s + step.seconds, 2),
+            out[nxt] = Route(screen=nxt, steps=prev.steps + [step], wait_s=round(prev.wait_s + max(step.seconds, 0), 2),
                              cold_start_s=start)
             queue.append(nxt)
     return out
