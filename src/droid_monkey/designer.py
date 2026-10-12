@@ -275,17 +275,33 @@ def new_goal(prompt: str) -> str:
             "device, fix it until it runs cleanly, and save it.")
 
 
+# The analysis sometimes names the building block (dark_mode) instead of the fault type it belongs to.
+FAULT_OF_BLOCK = {"dark_mode": "configuration_change", "font_scale": "configuration_change",
+                  "locale": "configuration_change", "rotate": "rotation", "trim_memory": "low_memory",
+                  "kill_in_background": "process_death", "network_off": "network_loss", "airplane_on": "network_loss",
+                  "revoke_permission": "permission_revoke", "cpu_stress": "performance", "anr": "performance"}
+
+
 def flow_risks(flows: list[dict], existing: dict) -> list[tuple[dict, dict]]:
-    """(flow, risk) pairs the analysis found, minus those a saved spec already covers (same flow and fault)."""
+    """(flow, risk) pairs the analysis found, minus those a saved spec already covers (same flow and fault).
+    A risk named after a building block (dark_mode) keeps it as the block to use, under its fault type."""
     covered = {(s.flow, s.fault_type) for s in existing.values() if s.flow}
-    return [(f, r) for f in flows for r in f.get("risks", [])
-            if r.get("fault") in specs_mod.FAULT_TYPES and (f.get("name"), r.get("fault")) not in covered]
+    out = []
+    for f in flows:
+        for r in f.get("risks", []):
+            fault = r.get("fault")
+            if fault not in specs_mod.FAULT_TYPES and fault in FAULT_OF_BLOCK:
+                r = {**r, "fault": FAULT_OF_BLOCK[fault], "block": fault}
+            if r.get("fault") in specs_mod.FAULT_TYPES and (f.get("name"), r["fault"]) not in covered:
+                out.append((f, r))
+    return out
 
 
 def flow_goal(flow: dict, risk: dict) -> str:
     steps = "; ".join(flow.get("steps", []))
     return (f"Design one attack for a risk the code analysis found on the user flow '{flow.get('name')}' "
-            f"({flow.get('description', '')}). Flow steps: {steps}. Fault: {risk.get('fault')}. Why the code is at "
+            f"({flow.get('description', '')}). Flow steps: {steps}. Fault: {risk.get('fault')}"
+            + (f" (use the {risk['block']} building block)" if risk.get("block") else "") + ". Why the code is at "
             f"risk: {risk.get('why', '')} ({risk.get('code', '')}). When to inject it: {risk.get('trigger', '')}.\n"
             "Start on the flow's screen from the screen map, perform the flow's steps with tap/fill actions, inject the "
             "fault at exactly that moment, and expect what a user expects (no_crash always; keeps_fields when the flow "
