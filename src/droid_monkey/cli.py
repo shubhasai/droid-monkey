@@ -671,6 +671,83 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
 
 
 @main.command()
+@APP_DIR
+@click.option("--apply/--no-apply", default=True, help="After the audit, ask about each finding and make the ones you "
+                                                     "accept (default). --no-apply only writes the audit.")
+@click.option("--agent", type=click.Choice(["api", "claude", "codex"]), default="api", show_default=True,
+              help="Coding agent that makes accepted changes (api: droid-monkey's own agent on your Anthropic key).")
+@click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for the coding agent.")
+@click.option("--review-model", default="claude-sonnet-5-5", show_default=True,
+              help="Model for the UX review (reads every screenshot; Anthropic API).")
+def ux(app_dir: Path, apply: bool, agent: str, model: str, review_model: str) -> None:
+    """UX audit: measure every mapped screen, review flows from the screenshots and code, and make the changes you
+    accept (each checked by building and replaying to the screen)."""
+    from . import ux as ux_mod
+    from .designer import load_flows
+    from .tracing import load_keys
+    load_keys()
+    theme.banner("ux audit")
+    ctx = _context(app_dir, time.strftime("ux-%Y%m%d-%H%M%S"))
+    if not _map_path(ctx).exists():
+        raise click.ClickException("no screen map yet: run `droid-monkey explore` first")
+    smap = ScreenMap.load(_map_path(ctx))
+    theme.header("screenshots of every screen", "(o.o)")
+    with theme.working("replaying paths to screens without a screenshot..."):
+        missing = ux_mod.capture_missing(ctx, smap, echo=click.echo)
+    analysis_md = paths.data_dir(ctx.cfg.app_dir) / "ANALYSIS.md"
+    theme.header("reviewing the flows", "(o_O)")
+    theme.kv("review", f"Anthropic API, {review_model}, {len(smap.screens) - len(missing)} screenshots")
+
+    def ask(f) -> str:
+        click.echo(ux_mod.render(f))
+        if not sys.stdin.isatty():
+            click.echo(click.style("not a terminal: not changing code", fg="yellow"))
+            return "no"
+        answer = click.prompt("Make this change? [y]es / [n]o / [a]ll remaining", default="n",
+                              type=click.Choice(["y", "n", "a", "yes", "no", "all"], case_sensitive=False),
+                              show_choices=False, show_default=False).lower()
+        return {"y": "yes", "n": "no", "a": "all"}.get(answer, answer)
+
+    with theme.working("the monkey is judging your flows..."):
+        findings, usage, report = ux_mod.run_audit(
+            ctx, smap, load_flows(ctx.cfg.app_dir), analysis_md.read_text() if analysis_md.exists() else "",
+            review_model=review_model)
+    theme.header(f"{len(findings)} findings", "(>.<)")
+    for f in findings:
+        click.echo(f"  {f.severity:6} {f.kind:13} {f.title}")
+    theme.kv("cost", f"{usage['input_tokens']:,} in / {usage['output_tokens']:,} out tokens, ${(usage['cost_usd'] or 0):.3f}")
+    if apply and findings:
+        theme.header("your call, one finding at a time", "(o.o)")
+        from .tools import git
+        home = git.current_branch(ctx.cfg.app_dir)
+        branch = f"droid-monkey/ux-{ctx.run_dir.name}"
+        git.start_run_branch(ctx.cfg.app_dir, branch, ctx.cfg.module)
+        auto = False
+        try:
+            for f in findings:
+                answer = "yes" if auto else ask(f)
+                if answer == "all":
+                    auto, answer = True, "yes"
+                if answer != "yes":
+                    f.status = "declined"
+                    continue
+                with theme.working(f"making the change: {f.title}..."):
+                    ux_mod.apply_finding(ctx, smap, f, ctx.run_dir / "ux" / f.id, agent, model, echo=click.echo)
+                if f.status != "applied":
+                    theme.warn(f"{f.id}: {f.note}")
+                ux_mod.write_report(ctx.cfg.app_dir, findings, usage)
+        finally:
+            git.checkout(ctx.cfg.app_dir, home)
+            if git.head(ctx.cfg.app_dir) == git.rev(ctx.cfg.app_dir, branch):
+                git.delete_branch(ctx.cfg.app_dir, branch)
+            report = ux_mod.write_report(ctx.cfg.app_dir, findings, usage)
+        applied = [f for f in findings if f.status == "applied"]
+        if applied:
+            theme.ok(f"{len(applied)} change(s) on {branch}; you are back on {home}")
+    theme.path_line("audit", report)
+
+
+@main.command()
 @click.argument("run_id")
 @APP_DIR
 def report(run_id: str, app_dir: Path) -> None:

@@ -116,6 +116,7 @@ BADGES = {
     "no_feedback": ("(-.-)", "magenta", "no feedback"),
     "leaked":      ("(;_;)", "cyan",    "leaked"),
     "froze":       ("(*_*)", "blue",    "froze"),
+    "anr":         ("(@_@)", "red",     "ANR"),
     "slow_start":  ("(u_u)", "yellow",  "slow start"),
     "skipped":     ("(._.)", "white",   "skipped"),
     # run statuses
@@ -171,6 +172,7 @@ FACES = {
     "skipped":     _head("- -", " --- ", top="  hear no evil", ears=("#|", "|#")),
     "leaked":      _head("T T", " ~~~ ", top="   drip  drip"),
     "froze":       _head("* *", " === ", top="    brrrrr", under="v-v-v"),
+    "anr":         _head("@ @", " --- ", top=" [ waiting... ]", under="`---` ;"),
     "slow_start":  _head("- -", " ___ ", top="         zZz"),
     "declined":    _head("- -", " --- ", top="  maybe later"),
     "unreachable": _head("? ?", " .-. ", top="     ?   ?"),
@@ -255,7 +257,7 @@ def loop_echo(line: str) -> None:
     if m:
         name, outcome, detail = m.groups()
         label = BADGES.get(outcome, ("", "", outcome))[2].upper()
-        d = re.match(r"\((.*)\)(?: at (.*))?$", detail, flags=re.S)
+        d = re.match(r"\((.*?)\)(?: at (.*))?$", detail, flags=re.S)
         lines = [d.group(1)] + ([f"at {d.group(2)}"] if d.group(2) else []) if d else ([detail] if detail else [])
         monkey_says(outcome, f"{label}  {name}", lines)
         return

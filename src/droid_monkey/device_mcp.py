@@ -289,6 +289,11 @@ class GraphRecorder:
         self.current = sid
         self.arrival[sid] = len(self.path)
         self.save()
+        try:
+            from .paths import save_screen
+            save_screen(self.ctx.adb, self.ctx.cfg.app_dir, sid, screen.xml)
+        except Exception:  # evidence is best effort; the map is what matters here
+            pass
         note = f" Files not found in the source: {missing}." if missing else ""
         return f"recorded '{sid}' (path {len(self.path)} steps, {len(fields)} input fields, {len(found)} files).{note}"
 

@@ -168,9 +168,8 @@ class Explorer:
     def _shoot(self, sid: str) -> None:
         """A picture of each screen as it was found, for the map and the report."""
         try:
-            out = self.d.dir / "screens" / f"{sid}.png"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(ui.screenshot(self.adb))
+            from .paths import save_screen
+            save_screen(self.adb, self.cfg.app_dir, sid)
         except AdbError as e:
             self.notes.append(f"screenshot of {sid}: {e}")
 

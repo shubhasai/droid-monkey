@@ -46,6 +46,20 @@ def attacks_dir(app_dir: Path) -> Path:
     return data_dir(app_dir) / "attacks"
 
 
+def screens_dir(app_dir: Path) -> Path:
+    """One screenshot and UI dump per mapped screen (<id>.png, <id>.xml), kept next to the screen map."""
+    return data_dir(app_dir) / "screens"
+
+
+def save_screen(adb, app_dir: Path, sid: str, xml: str | None = None) -> None:
+    """Keep the evidence of a mapped screen: what it looked like and what was on it."""
+    from .tools import ui
+    out = screens_dir(app_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{sid}.png").write_bytes(ui.screenshot(adb))
+    (out / f"{sid}.xml").write_text(xml if xml is not None else ui.dump(adb).xml)
+
+
 def run_dir(app_dir: Path, run_id: str) -> Path:
     """Evidence folder for one run. Not created here: it appears only once something is written into it."""
     return data_dir(app_dir) / "runs" / run_id
