@@ -9,6 +9,7 @@
 Attack failures are fixed by `run --attacks <name>`, which replays the identical attack.
 """
 
+import json
 import time
 from pathlib import Path
 
@@ -69,13 +70,24 @@ def still_there(ctx: Context, x: Issue) -> bool | None:
         return None
 
 
+def _record(ctx: Context, x: Issue, status: str, message: str, started: float, **extra) -> str:
+    """fix.json in the run folder: what was fixed and how it ended, for the dashboard and the issue list."""
+    ctx.run_dir.mkdir(parents=True, exist_ok=True)
+    (ctx.run_dir / "fix.json").write_text(json.dumps(
+        {"issue": x.id, "key": x.key, "source": x.source, "title": x.title, "detail": x.detail, "screen": x.screen,
+         "steps": x.steps, "status": status, "message": message, "seconds": round(time.time() - started), **extra},
+        indent=1, ensure_ascii=False))
+    return message
+
+
 def fix(ctx: Context, x: Issue, agent: str, model: str | None, ask) -> str:
     cfg = ctx.cfg
+    started = time.time()
     if x.source == "attack":
         raise click.ClickException(f"attack failures are fixed by replaying the attack: droid-monkey run --attacks {x.attack}")
     click.echo(explain(x))
     if ask() != "yes":
-        return "declined: no code was changed"
+        return _record(ctx, x, "declined", "declined: no code was changed", started)
     home = git.current_branch(cfg.app_dir)
     branch = f"droid-monkey/fix-{x.id}"
     base = git.start_run_branch(cfg.app_dir, branch, cfg.module)
@@ -100,7 +112,8 @@ def fix(ctx: Context, x: Issue, agent: str, model: str | None, ask) -> str:
         git.discard(cfg.app_dir, git.dirty_paths(cfg.app_dir, f"{cfg.module}/src"))
         git.checkout(cfg.app_dir, home)
         git.delete_branch(cfg.app_dir, branch)
-        return f"not fixed: {why}; your code is unchanged and you are back on {home}"
+        return _record(ctx, x, "unfixed", f"not fixed: {why}; your code is unchanged and you are back on {home}", started,
+                       reason=why, agent_note=res.text[:1500])
 
     click.echo(f"  {res.text[:400]}")
     if not keep:
@@ -122,5 +135,6 @@ def fix(ctx: Context, x: Issue, agent: str, model: str | None, ask) -> str:
     sha, checkpoint = git.commit(cfg.app_dir, keep, f"fix: {x.title}\n\n{x.detail}\n\nFound by droid-monkey ({x.source}); "
                                                     f"check: {check}.")
     git.checkout(cfg.app_dir, home)
-    return (f"fixed on {branch}: commit {sha[:8]}" + (f", Entire checkpoint {checkpoint}" if checkpoint else "")
-            + f" ({check}). Back on {home}; review the branch or open a PR.")
+    return _record(ctx, x, "fixed", f"fixed on {branch}: commit {sha[:8]}" + (f", Entire checkpoint {checkpoint}" if checkpoint else "")
+                   + f" ({check}). Back on {home}; review the branch or open a PR.", started,
+                   branch=branch, commit=sha, checkpoint=checkpoint, check=check, files=keep, agent_note=res.text[:1500])

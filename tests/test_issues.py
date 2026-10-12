@@ -64,3 +64,40 @@ def test_an_attack_named_in_an_older_report_still_runs():
     assert a and a["screen"] == "detail" and a["spec"].screen == "detail" and a["spec"].name == "low_memory_on_detail"
     assert scenarios.named_attack(smap, known, "low_memory")["base"] == "low_memory"
     assert scenarios.named_attack(smap, known, "no_such_attack") is None
+
+
+def test_fixed_issues_stay_listed_with_their_branch(tmp_path):
+    import os
+    root = _root(tmp_path)
+    hunt = next(x for x in issues.collect(root) if x.source == "hunt")
+    fx = root / "runs" / "fix-1"
+    fx.mkdir()
+    (fx / "fix.json").write_text(json.dumps({"issue": hunt.id, "key": "ph:dispatch", "source": "hunt", "title": hunt.title,
+                                             "status": "fixed", "branch": "droid-monkey/fix-abc", "commit": "d054227cafe"}))
+    run = root / "runs" / "run-1"
+    run.mkdir()
+    (run / "summary.json").write_text(json.dumps({"branch": "droid-monkey/run-1", "outcomes": [
+        {"attack": "rotation", "status": "fixed", "before": "crashed", "commit": "709354b"}]}))
+    os.utime(fx, (9e9, 9e9))
+    os.utime(run, (9e9 + 1, 9e9 + 1))
+    found = {x.source: x for x in issues.collect(root)}
+    assert found["hunt"].status == "fixed" and found["hunt"].branch == "droid-monkey/fix-abc"
+    assert found["hunt"].fix_args == ["pr", "fix-1"] and not found["hunt"].seen_after_fix
+    assert found["attack"].status == "fixed" and found["attack"].branch == "droid-monkey/run-1"
+    assert found["attack"].title.endswith("crashed") and found["ux"].status == "open"
+    ranked, _ = issues.rank(root, list(found.values()), use_jev=False)
+    assert ranked[-1].status == "fixed" and ranked[0].status == "open"
+
+
+def test_fix_run_page_shows_branch_and_pr(tmp_path):
+    from droid_monkey import live
+    root = _root(tmp_path)
+    fx = root / "runs" / "fix-20261012-162253"
+    fx.mkdir()
+    (fx / "fix.json").write_text(json.dumps({"issue": "abc", "key": "k", "source": "hunt", "title": "Negative money",
+                                             "status": "fixed", "message": "fixed", "branch": "droid-monkey/fix-abc",
+                                             "commit": "d054227cafe", "check": "re-walked on the device: gone"}))
+    info = live.run_info(fx)
+    assert info["fixed"] == 1 and not info["live"] and info["outcomes"] == [("Negative money", "fixed")]
+    page = live.page_run(root, tmp_path, fx.name)
+    assert "droid-monkey/fix-abc" in page and "prbtn" in page and "re-walked" in page and "running" not in page

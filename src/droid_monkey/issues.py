@@ -45,12 +45,19 @@ class Issue:
     files: list[str] = field(default_factory=list)
     observed: bool = True       # False: suspected from the code only (UX)
     key: str = ""               # what identifies the same issue in a later run (hunt key, attack name, ux id)
+    status: str = "open"        # open | fixed (committed on its own branch)
+    branch: str = ""            # the fix's branch, when fixed
+    commit: str = ""
+    fix_run: str = ""           # the run that fixed it: `pr <fix_run>` opens its pull request
+    seen_after_fix: bool = False  # a later run still saw it: the fix is only on its branch until merged
     score: float = 0.0
     rank_reason: str = ""
     ranked_by: str = ""
 
     @property
     def fix_args(self) -> list[str]:
+        if self.status == "fixed":
+            return ["pr", self.fix_run]
         return ["run", "--attacks", self.attack] if self.source == "attack" else ["fix", self.id]
 
 
@@ -63,19 +70,35 @@ def _when(path: Path) -> str:
 
 
 def collect(root: Path) -> list[Issue]:
-    """Every open issue, newest sighting kept."""
+    """Every issue, newest sighting kept. A fixed one stays in the list, marked fixed with its branch (a fix lives on
+    its own branch until you merge it, so a later run on your branch may still see the issue: that is noted)."""
     found: dict[str, Issue] = {}
+    seen: dict[str, Issue] = {}           # never forgets: a fixed attack that later survives is still shown, as fixed
+    fixes: dict[str, dict] = {}           # issue key -> the fix that committed it
+    seen_at: dict[str, float] = {}
     runs = sorted((root / "runs").iterdir(), key=lambda p: p.stat().st_mtime) if (root / "runs").exists() else []
+
+    def sight(k: str, x: Issue, when: float) -> None:
+        found[k] = seen[k] = x
+        seen_at[k] = when
+
     for run in runs:  # oldest first, so a newer sighting replaces an older one
+        when = run.stat().st_mtime
+        done = run / "fix.json"
+        if done.exists():
+            f = json.loads(done.read_text())
+            if f.get("status") == "fixed":
+                fixes[f"{f.get('source')}:{f.get('key')}"] = {"branch": f.get("branch", ""), "commit": f.get("commit", ""),
+                                                              "run": run.name, "at": when}
         hunt = run / "issues.json"
         if hunt.exists():
             for x in json.loads(hunt.read_text()).get("issues", []):
                 key = x.get("key") or x.get("title", "")
-                found[f"hunt:{key}"] = Issue(
+                sight(f"hunt:{key}", Issue(
                     id=_id("hunt", key), source="hunt", title=x.get("title", ""), detail=x.get("detail", ""),
                     severity=x.get("severity", "medium"), screen=x.get("screen", ""), run=run.name, found=_when(hunt),
                     evidence=[e for e in x.get("evidence", []) if not e.endswith((".png", ".xml", ".txt"))][:6],
-                    steps=x.get("steps", []), key=key)
+                    steps=x.get("steps", []), key=key), when)
         results = run / "results.json"
         summary = run / "summary.json"
         rows = []
@@ -83,31 +106,41 @@ def collect(root: Path) -> list[Issue]:
             rows = [(r.get("attack"), r.get("outcome"), r.get("crash_signature") or r.get("reason", ""), r.get("screen", ""))
                     for r in json.loads(results.read_text())]
         elif summary.exists():
-            for o in json.loads(summary.read_text()).get("outcomes", []):
-                status = o.get("status")
-                rows.append((o.get("attack"), "fixed" if status == "fixed" else o.get("before"),
-                             o.get("before_detail", ""), (o.get("metrics") or {}).get("screen", "")))
+            s = json.loads(summary.read_text())
+            for o in s.get("outcomes", []):
+                rows.append((o.get("attack"), o.get("before"), o.get("before_detail", ""),
+                             (o.get("metrics") or {}).get("screen", "")))
+                if o.get("status") == "fixed" and o.get("attack"):
+                    fixes[f"attack:{o['attack']}"] = {"branch": s.get("branch", ""), "commit": o.get("commit", ""),
+                                                      "run": run.name, "at": when}
         for name, outcome, detail, screen in rows:
-            if not name:
+            if not name or not outcome:
                 continue
             if outcome in NOT_PROBLEMS:
-                found.pop(f"attack:{name}", None)  # fixed or survived since: no longer open
+                found.pop(f"attack:{name}", None)  # survived since: no longer open (a fixed one comes back below)
                 continue
-            found[f"attack:{name}"] = Issue(
+            sight(f"attack:{name}", Issue(
                 id=_id("attack", name), source="attack", title=f"{name.replace('_', ' ')}: {outcome.replace('_', ' ')}",
                 detail=str(detail)[:400], severity=outcome, screen=screen, run=run.name,
-                found=_when(results if results.exists() else summary), attack=name, key=name)
+                found=_when(results if results.exists() else summary), attack=name, key=name), when)
     ux = root / "ux-audit.json"
     if ux.exists():
         for f in json.loads(ux.read_text()).get("findings", []):
             if f.get("status") == "applied":
                 continue
-            found[f"ux:{f['id']}"] = Issue(
+            sight(f"ux:{f['id']}", Issue(
                 id=_id("ux", f["id"]), source="ux", title=f.get("title", ""),
                 detail=(f.get("problem", "") + " Suggested: " + f.get("change", "")).strip(),
                 severity=f.get("severity", "medium"), screen=(f.get("screens") or [""])[0],
                 evidence=f.get("evidence", [])[:6], files=f.get("files", []), observed=f.get("observed", True),
-                run="ux audit", found=_when(ux), key=f["id"])
+                run="ux audit", found=_when(ux), key=f["id"]), ux.stat().st_mtime)
+    for k, fx in fixes.items():
+        x = seen.get(k)
+        if not x:
+            continue
+        x.status, x.branch, x.commit, x.fix_run = "fixed", fx["branch"], fx["commit"], fx["run"]
+        x.seen_after_fix = seen_at.get(k, 0) > fx["at"] and x.source != "ux"
+        found[k] = x
     return list(found.values())
 
 
@@ -132,7 +165,7 @@ def rank(root: Path, issues: list[Issue], app: str = "", use_jev: bool = True) -
     """Scores from the cache, Jev for new issues, severity when Jev is unavailable. Returns (sorted, note)."""
     cache = json.loads(_rank_file(root).read_text()) if _rank_file(root).exists() else {}
     note, jev = "", None
-    todo = [x for x in issues if x.id not in cache]
+    todo = [x for x in issues if x.id not in cache and x.status != "fixed"]  # a fixed issue needs no ranking
     if todo and use_jev:
         try:
             from .jev import Jev, JevUnavailable
@@ -160,7 +193,7 @@ def rank(root: Path, issues: list[Issue], app: str = "", use_jev: bool = True) -
     for x in issues:
         r = cache.get(x.id) or {}
         x.score, x.rank_reason, x.ranked_by = r.get("score", 0.0), r.get("reason", ""), r.get("by", "")
-    return sorted(issues, key=lambda x: -x.score), note
+    return sorted(issues, key=lambda x: (x.status == "fixed", -x.score)), note
 
 
 def rerank(root: Path) -> None:

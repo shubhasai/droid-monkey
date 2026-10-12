@@ -862,25 +862,46 @@ def report(run_id: str, app_dir: Path) -> None:
 @click.option("--base", default="main", show_default=True, help="Branch to open the PR against.")
 @click.option("--draft", is_flag=True, help="Open the PR as a draft.")
 def pr(run_id: str, app_dir: Path, base: str, draft: bool) -> None:
-    """Push the run's branch (with Entire checkpoints) and open a GitHub PR with the evidence table."""
+    """Push the run's branch (with Entire checkpoints) and open a GitHub PR with the evidence table. RUN_ID is a
+    full run (`run`) or a fix (`fix ISSUE`)."""
     import subprocess
     from . import report as report_mod
     cfg = config_mod.load(app_dir)
-    summary = report_mod.load_summary(cfg.app_dir, run_id)
-    r = report_mod.build(cfg.app_dir, cfg.package, run_id)
-    branch = summary["branch"]
-    fixed = r.fixed
-    title = f"droid-monkey: fix {fixed} lifecycle bug{'s' if fixed != 1 else ''} (resilience {r.score}/100)"
+    fix_file = paths.run_dir(cfg.app_dir, run_id) / "fix.json"
+    if fix_file.exists():
+        f = json.loads(fix_file.read_text())
+        if f.get("status") != "fixed" or not f.get("branch"):
+            raise click.ClickException(f"{run_id} did not commit a fix ({f.get('status')}): nothing to open a PR for")
+        branch, title = f["branch"], f"droid-monkey: fix: {f['title']}"
+        body = fix_file.with_name("PR.md")
+        body.write_text(fix_pr_body(f))
+    else:
+        summary = report_mod.load_summary(cfg.app_dir, run_id)
+        r = report_mod.build(cfg.app_dir, cfg.package, run_id)
+        branch, body = summary["branch"], r.pr_body
+        fixed = r.fixed
+        title = f"droid-monkey: fix {fixed} lifecycle bug{'s' if fixed != 1 else ''} (resilience {r.score}/100)"
     theme.header("opening a PR", "(^o^)")
     theme.note(f"pushing {branch} ...")
     subprocess.run(["git", "push", "-u", "origin", branch], cwd=cfg.app_dir, check=True)
-    cmd = ["gh", "pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", str(r.pr_body)]
+    cmd = ["gh", "pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", str(body)]
     if draft:
         cmd.append("--draft")
     out = subprocess.run(cmd, cwd=cfg.app_dir, capture_output=True, text=True)
     if out.returncode != 0:
         raise click.ClickException(out.stderr.strip())
     theme.ok(f"bananas delivered: {out.stdout.strip()}")
+
+
+def fix_pr_body(f: dict) -> str:
+    """The PR description for a `fix ISSUE` commit: the issue, how it shows, the fix and how it was checked."""
+    steps = "\n".join(f"{n}. `{s}`" for n, s in enumerate(f.get("steps", []), 1)) or "On launch."
+    files = "\n".join(f"- `{x}`" for x in f.get("files", []))
+    return (f"## {f['title']}\n\n**What happens:** {f.get('detail', '')}\n\n**Screen:** {f.get('screen') or '-'} · "
+            f"found by droid-monkey ({f.get('source')})\n\n### Steps from a fresh launch\n{steps}\n\n"
+            f"### The fix\n{f.get('agent_note', '')}\n\n{files}\n\n### Checked\n{f.get('check', '')}: droid-monkey "
+            f"rebuilt the app, cleared its data, re-walked the steps and ran the same detectors.\n\n"
+            + (f"Entire checkpoint: `{f['checkpoint']}`\n" if f.get("checkpoint") else ""))
 
 
 @main.command()
@@ -982,10 +1003,12 @@ def issues_cmd(app_dir: Path, rerank: bool, no_jev: bool) -> None:
     ranked, note = issues_mod.rank(root, issues_mod.collect(root), cfg.package, use_jev=not no_jev)
     if note:
         theme.warn(note)
-    theme.header(f"{len(ranked)} open issues, most harmful first")
+    open_n = sum(1 for x in ranked if x.status != "fixed")
+    theme.header(f"{open_n} open issues, most harmful first" + (f", then {len(ranked) - open_n} fixed" if len(ranked) > open_n else ""))
     for n, x in enumerate(ranked, 1):
         click.echo(f"  {n:>2}. {style(f'{x.score:.2f}', bold=True)} {style(x.source, fg='cyan'):14} {x.title[:70]}"
-                   + ("" if x.observed else style("  (suspected)", fg="bright_black")))
+                   + ("" if x.observed else style("  (suspected)", fg="bright_black"))
+                   + (style(f"  [fixed on {x.branch}]", fg="green") if x.status == "fixed" else ""))
         click.echo(style(f"      {x.rank_reason} · fix: droid-monkey {' '.join(x.fix_args)}", fg="bright_black"))
 
 
@@ -1007,6 +1030,9 @@ def fix_cmd(issue_id: str, app_dir: Path, agent: str | None, model: str | None) 
     x = next((i for i in ranked if i.id.startswith(issue_id)), None)
     if not x:
         raise click.ClickException(f"no open issue {issue_id}: see `droid-monkey issues`")
+    if x.status == "fixed":
+        raise click.ClickException(f"already fixed on {x.branch} (commit {x.commit[:8]}): merge it, or open a PR with "
+                                   f"droid-monkey pr {x.fix_run}")
     if x.source == "attack":
         raise click.ClickException(f"attack failures are fixed by replaying the attack: droid-monkey run --attacks {x.attack}")
     _load_app(ctx)

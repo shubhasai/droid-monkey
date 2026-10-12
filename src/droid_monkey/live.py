@@ -57,7 +57,7 @@ def version(root: Path) -> str:
 
 
 RUN_KINDS = {"attack": "attack", "run": "run", "flows": "flow attacks", "explore": "explore", "ux": "UX", "hunt": "hunt",
-             "visuals": "run"}
+             "visuals": "run", "fix": "fix"}
 
 
 def _kind(run_id: str) -> str:
@@ -82,6 +82,15 @@ def run_info(run: Path) -> dict:
             "fixed": 0, "outcomes": [], "cost": None, "live": False, "dashboard": (run / "dashboard.html").exists()}
     summary = _json(run / "summary.json")
     hunted = _json(run / "issues.json")
+    fixed = _json(run / "fix.json")
+    if fixed:  # `fix ISSUE`: one hunt or UX issue, fixed or not
+        info.update(fix=fixed, fixed=int(fixed.get("status") == "fixed"),
+                    outcomes=[(fixed.get("title"), fixed.get("status"))])
+        return info
+    if not summary and not hunted and info["kind"] == "fix":  # still working (or stopped before it wrote fix.json)
+        newest = max((p.stat().st_mtime for p in run.rglob("*") if p.is_file()), default=run.stat().st_mtime)
+        info.update(fix={}, live=time.time() - newest < 600)
+        return info
     if hunted and not summary:  # a hunt: issues in normal use, no attacks
         issues = hunted.get("issues", [])
         info.update(attacks=hunted.get("journeys", 0), broke=len(issues), hunt=True,
@@ -211,7 +220,8 @@ def thumbnail(path: Path, width: int = 360) -> bytes:
 
 def _chip(outcome: str | None) -> str:
     tone = {"survived": "ok", "fixed": "ok", "skipped": "idle", "declined": "idle", "unreachable": "idle",
-            "harness_error": "idle", "low": "idle", "medium": "warn"}.get(outcome or "", "bad")
+            "harness_error": "idle", "low": "idle", "medium": "warn",
+            "unfixed": "warn", "no result": "idle"}.get(outcome or "", "bad")
     return f'<span class="chip c-{tone}">{esc(str(outcome or "?").replace("_", " "))}</span>'
 
 
@@ -224,7 +234,9 @@ def _stat(label: str, num, sub: str = "", href: str = "") -> str:
 def _runs_table(rs: list[dict]) -> str:
     rows = []
     for r in rs:
-        counts = (f"{r['attacks']} journeys · {r['broke']} issues" if r.get("hunt") else
+        counts = (("fix: " + esc(r["fix"].get("title", "")[:60]) if r["fix"] else "fix: in progress or stopped")
+                  if "fix" in r else
+                  f"{r['attacks']} journeys · {r['broke']} issues" if r.get("hunt") else
                   f"{r['attacks']} attacks · {r['broke']} broke" + (f" · {r['fixed']} fixed" if r["fixed"] else ""))
         chips = "".join(_chip(o) for _, o in r["outcomes"][:8]) + ("…" if len(r["outcomes"]) > 8 else "")
         live = '<span class="livebadge">running</span>' if r["live"] else ""
@@ -315,10 +327,16 @@ def page_run(root: Path, app: Path, run_id: str) -> str:
             + (' · <span class="livebadge">running</span>' if info["live"] else "") + '</p></header>')
     extras = "".join(f'<a class="btn" href="{_f(f"runs/{run_id}/{n}")}">{n}</a>'
                      for n in ("receipt.md", "log.txt", "summary.json", "results.json") if (run / n).exists())
+    if "fix" in info:
+        return _fix_head(run_id, info) + _fix_body(run, root, info["fix"])
     if (run / "issues.json").exists():
         return head + _hunt_body(run, root)
+    summary = _json(run / "summary.json") or {}
+    pr = _pr_bar(run_id, summary["branch"], f'{info["fixed"]} verified fix{"es" if info["fixed"] != 1 else ""} '
+                 f'(each replayed the identical attack and passed its regression test)') \
+        if summary.get("branch") and info["fixed"] else ""
     if (run / "dashboard.html").exists():
-        return head + (f'<p class="actions">{extras}<a class="btn" href="{_f(f"runs/{run_id}/dashboard.html")}" '
+        return head + pr + (f'<p class="actions">{extras}<a class="btn" href="{_f(f"runs/{run_id}/dashboard.html")}" '
                        f'target="_blank">Open full screen</a></p>' if True else "") \
             + f'<iframe class="report" src="{_f(f"runs/{run_id}/dashboard.html")}" title="run report"></iframe>'
     cards = "".join(_evidence_card(run, d, root) for d in _attack_dirs(run))
@@ -326,6 +344,50 @@ def page_run(root: Path, app: Path, run_id: str) -> str:
     partial = "".join(f'<li><code>{esc(d.name)}</code>: no verdict yet ({len(list(d.iterdir()))} files)</li>' for d in rest)
     return head + (f'<p class="actions">{extras}</p>' if extras else "") + (cards or "") + (
         f'<section class="panel"><h2>Without a verdict</h2><ul>{partial}</ul></section>' if partial else "")
+
+
+def _pr_bar(run_id: str, branch: str, what: str) -> str:
+    """The fix's branch and how to get it into the app: open a PR (asks to confirm), or merge it yourself."""
+    return (f'<section class="panel prbar"><div class="panel-head"><h2>Branch</h2>'
+            f'<button type="button" class="run prbtn" data-run="{esc(run_id)}">Open PR</button></div>'
+            f'<p><code>{esc(branch)}</code> holds {what}. Your branch is unchanged until you merge it.</p>'
+            f'<p class="hint">Open PR pushes this branch to GitHub and opens a pull request (it asks you to confirm). Or merge '
+            f'it locally: <code>git merge {esc(branch)}</code></p></section>')
+
+
+def _fix_head(run_id: str, info: dict) -> str:
+    f = info["fix"]
+    state = _chip(f["status"]) if f else ('<span class="livebadge">running</span>' if info["live"] else _chip("no result"))
+    return (f'<header class="top"><p class="eyebrow"><a href="/runs">Runs</a> / fix</p><h1><code>{esc(run_id)}</code></h1>'
+            f'<p class="meta">{esc(info["when"])} · {state}' + (f' · {f["seconds"]} s' if f.get("seconds") else "") + '</p></header>')
+
+
+def _fix_body(run: Path, root: Path, f: dict) -> str:
+    """`fix ISSUE`: the issue, what the coding agent changed, how it was checked, and the screen after the fix."""
+    rel = run.relative_to(root).as_posix()
+    after = run / "recheck" / "after.png"
+    img = (f'<figure><img src="{_t(rel + "/recheck/after.png")}" data-full="{_f(rel + "/recheck/after.png")}" alt="after the fix">'
+           f'<figcaption>after the fix, re-walked from launch</figcaption></figure>') if after.exists() else ""
+    if not f:
+        return (f'<section class="panel"><h2>No result yet</h2><p>The fix is still running, or it was stopped before it '
+                f'finished. Its output is on the Commands page (recent jobs).</p></section><div class="shots">{img}</div>')
+    steps = "".join(f"<li><code>{esc(s)}</code></li>" for s in f.get("steps", [])) or "<li>on launch</li>"
+    rows = [("Issue", esc(f.get("title", "")) + f' <span class="hint">({esc(f.get("source", ""))}, id {esc(f.get("issue", ""))})</span>'),
+            ("What happened", esc(f.get("detail", ""))), ("Screen", esc(f.get("screen") or "–")),
+            ("Result", esc(f.get("message", "")))]
+    if f.get("check"):
+        rows.append(("Checked", esc(f["check"])))
+    if f.get("commit"):
+        rows.append(("Commit", f'<code>{esc(f["commit"][:8])}</code> on <code>{esc(f.get("branch", ""))}</code>'
+                     + (f' · Entire checkpoint <code>{esc(f["checkpoint"])}</code>' if f.get("checkpoint") else "")))
+    if f.get("files"):
+        rows.append(("Files", " ".join(f"<code>{esc(x)}</code>" for x in f["files"])))
+    table = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
+    note = f'<section class="panel"><h2>The coding agent</h2><p>{esc(f["agent_note"])}</p></section>' if f.get("agent_note") else ""
+    pr = _pr_bar(run.name, f["branch"], "this fix, committed and checked on the device") if f.get("commit") else ""
+    return (pr + f'<section class="panel"><div class="scroll"><table class="kv">{table}</table></div></section>{note}'
+            f'<div class="two"><section class="panel"><h2>Steps from launch</h2><ol>{steps}</ol></section>'
+            f'<div class="shots">{img}</div></div>')
 
 
 def _hunt_body(run: Path, root: Path) -> str:
@@ -498,9 +560,12 @@ def _options(root: Path, cmd: str, param: str) -> list[tuple[str, str]] | None:
         return [(p.stem, p.stem) for p in sorted((root / "attacks").glob("*.yaml"))] if (root / "attacks").exists() else []
     if param in ("run_id", "run_a", "run_b") and cmd in ("report", "pr", "compare"):
         rs = runs(root)
-        if cmd in ("report", "pr"):
+        if cmd == "report":
             rs = [r for r in rs if (root / "runs" / r["id"] / "summary.json").exists()]
-        return [(r["id"], f'{r["id"]} · {r["attacks"]} attacks, {r["broke"]} broke') for r in rs]
+        if cmd == "pr":  # a run or a fix that committed something
+            rs = [r for r in rs if r["fixed"] and ((root / "runs" / r["id"] / "summary.json").exists() or r.get("fix"))]
+        return [(r["id"], f'{r["id"]} · fix: {r["fix"].get("title", "")[:50]}' if r.get("fix") else
+                 f'{r["id"]} · {r["attacks"]} attacks, {r["broke"]} broke, {r["fixed"]} fixed') for r in rs]
     return None
 
 
@@ -643,8 +708,9 @@ def page_issues(root: Path, app: Path, jobs=None) -> str:
         else:
             x.score, x.rank_reason = issues_mod._fallback(x)
             x.ranked_by = "not ranked yet"
-    found.sort(key=lambda x: -x.score)
-    new = sum(1 for x in found if x.ranked_by == "not ranked yet")
+    found.sort(key=lambda x: (x.status == "fixed", -x.score))  # open issues first, most harmful first; then fixed
+    new = sum(1 for x in found if x.ranked_by == "not ranked yet" and x.status != "fixed")
+    open_n = sum(1 for x in found if x.status != "fixed")
     busy = jobs.busy() if jobs else None
     rows = []
     for n, x in enumerate(found, 1):
@@ -652,22 +718,33 @@ def page_issues(root: Path, app: Path, jobs=None) -> str:
         how = ("replays the identical attack after the fix" if x.source == "attack" else
                "re-walks the steps on the device after the fix" if x.source == "hunt" else "rebuilds and screenshots")
         ev = "".join(f"<li><code>{esc(e[:160])}</code></li>" for e in x.evidence[:3])
-        rows.append(f"""<article class="issue" data-src="{esc(x.source)}">
+        if x.status == "fixed":
+            fixed_line = (f'<p class="fixedon">{_chip("fixed")} on <code>{esc(x.branch)}</code>'
+                          + (f' · commit <code>{esc(x.commit[:8])}</code>' if x.commit else "")
+                          + f' · <a href="/run/{quote(x.fix_run)}">the fix</a>'
+                          + (' · <b>a later run still saw it</b>: the fix is only on that branch until you merge it' if x.seen_after_fix else "")
+                          + '</p>')
+            action = (f'<button type="button" class="run prbtn" data-run="{esc(x.fix_run)}"{" disabled" if busy else ""}>Open PR</button>'
+                      f'<span class="hint">pushes <code>{esc(x.branch)}</code> to GitHub and opens a pull request; asks you to confirm</span>')
+        else:
+            fixed_line = ""
+            action = (f'<button type="button" class="run fixbtn" data-cmd="{esc(x.fix_args[0])}" data-arg="{esc(x.attack if x.source == "attack" else x.id)}"{" disabled" if busy else ""}>Fix</button>'
+                      f'<span class="hint">asks you first · {how}</span>')
+        rows.append(f"""<article class="issue{' isfixed' if x.status == 'fixed' else ''}" data-src="{esc(x.source)}" data-status="{esc(x.status)}">
 <div class="rank"><span class="rn">{n}</span><span class="score s-{tone}">{x.score:.2f}</span></div>
 <div class="ibody"><h3>{esc(x.title)}</h3>
 <p class="imeta"><span class="chip c-idle">{esc(x.source)}</span> {esc(x.severity)}{' · screen ' + esc(x.screen) if x.screen else ''}
 {' · <i>suspected in code</i>' if not x.observed else ''} · found {esc(x.found)} in <code>{esc(x.run)}</code></p>
 <p class="why"><b>{'Jev' if x.ranked_by == 'jev' else 'Ranked'}:</b> {esc(x.rank_reason)}</p>
-<p>{esc(x.detail[:400])}</p>{f'<ul class="iev">{ev}</ul>' if ev else ''}</div>
-<div class="ifix"><button type="button" class="run fixbtn" data-cmd="{esc(x.fix_args[0])}" data-arg="{esc(x.attack if x.source == 'attack' else x.id)}"{" disabled" if busy else ""}>Fix</button>
-<span class="hint">asks you first · {how}</span></div></article>""")
-    return f"""<header class="top"><h1>Issues</h1><p class="meta">{len(found)} open issues from every attack, hunt and UX audit,
-most harmful first. Jev (TypeSafe) scores each one: expected impact on users × how likely it is a real bug.</p>
+{fixed_line}<p>{esc(x.detail[:400])}</p>{f'<ul class="iev">{ev}</ul>' if ev else ''}</div>
+<div class="ifix">{action}</div></article>""")
+    return f"""<header class="top"><h1>Issues</h1><p class="meta">{open_n} open and {len(found) - open_n} fixed, from every attack, hunt and UX audit;
+open ones first, most harmful first. Jev (TypeSafe) scores each one: expected impact on users × how likely it is a real bug.</p>
 <p class="actions"><button type="button" class="btn rankbtn" data-all="0">{f'Rank {new} new with Jev' if new else 'All ranked'}</button>
 <button type="button" class="btn rankbtn" data-all="1">Re-rank all</button><span class="hint rankmsg"></span></p>
 {('<a class="busy" href="/job/' + esc(busy.id) + '">Running: ' + esc(busy.command) + ' → open</a>') if busy else ''}</header>
 <div class="filters" role="group"><button type="button" class="on" data-f="all">All</button><button type="button" data-f="attack">Attacks</button>
-<button type="button" data-f="hunt">Hunt</button><button type="button" data-f="ux">UX</button></div>
+<button type="button" data-f="hunt">Hunt</button><button type="button" data-f="ux">UX</button><button type="button" data-f="fixed">Fixed</button></div>
 <div class="issues">{''.join(rows) or '<p class="hint">No open issues. Run Find bugs or Attack first.</p>'}</div>"""
 
 
@@ -1044,6 +1121,8 @@ button.run:disabled{opacity:.45;cursor:not-allowed}
 .jobpill b{margin-left:auto;font:600 11px var(--body);color:var(--accent)}
 .spin{width:10px;height:10px;border-radius:50%;border:2px solid var(--accent);border-right-color:transparent;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.issue.isfixed{opacity:.86}.fixedon{margin:2px 0;font-size:13px}
+.kv th{width:140px;text-transform:none;letter-spacing:0;font-size:13px;vertical-align:top}
 .joblayout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
 .devlayout{display:grid;grid-template-columns:minmax(260px,380px) minmax(0,1fr);gap:20px;align-items:start}
 .phone{margin:0;display:grid;gap:8px;position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px)}
@@ -1175,7 +1254,15 @@ document.querySelectorAll('.rankbtn').forEach(b=>b.addEventListener('click',asyn
 document.querySelectorAll('.issues ~ * , .filters [data-f]').forEach(()=>{});
 document.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('[data-f]').forEach(x=>x.classList.toggle('on',x===b));
-  document.querySelectorAll('.issue').forEach(i=>i.hidden=b.dataset.f!=='all'&&i.dataset.src!==b.dataset.f)}));
+  document.querySelectorAll('.issue').forEach(i=>i.hidden=b.dataset.f==='fixed'?i.dataset.status!=='fixed':
+    b.dataset.f!=='all'&&i.dataset.src!==b.dataset.f)}));
+document.querySelectorAll('.prbtn').forEach(b=>b.addEventListener('click',async()=>{
+  const box=b.closest('.ifix,.prbar');
+  if(!box.querySelector('.confirm')){const c=document.createElement('p');c.className='confirm danger';
+    c.innerHTML='This pushes the branch to GitHub and opens a pull request. Press <b>Open PR</b> again to confirm.';box.append(c);return}
+  b.disabled=true;b.textContent='Starting…';
+  try{const j=await api('/api/jobs',{command:'pr',values:{run_id:b.dataset.run},confirm:true});location.href='/job/'+j.id}
+  catch(e){b.disabled=false;b.textContent='Open PR';box.querySelector('.confirm').textContent=e.message}}));
 document.querySelectorAll('.fixbtn').forEach(b=>b.addEventListener('click',async()=>{
   b.disabled=true;b.textContent='Starting…';
   const values=b.dataset.cmd==='run'?{only:b.dataset.arg}:{issue_id:b.dataset.arg};
