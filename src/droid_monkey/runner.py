@@ -110,10 +110,12 @@ class SpecRunner:
                 if "shows_feedback" in spec.expect and texts_before is None:
                     texts_before = self._visible_texts(ui.dump(d.adb))
                 d.notes.append(f"step {i}: fault {step['fault']}")
-                self._fault(step)
+                if not self._survives(lambda: self._fault(step), i):
+                    break
             else:
                 (key, value), = step.items()
-                self._action(key, value)
+                if not self._survives(lambda: self._action(key, value), i):
+                    break
 
         trace_file = self._stop_trace(trace_rec) if trace_rec else None
         crashes = d.crashes()
@@ -153,6 +155,19 @@ class SpecRunner:
         if trace_file:
             self._analyse_trace(trace_file)
         return verdict, before, after
+
+    def _survives(self, do, i: int) -> bool:
+        """Run one step. If the device step fails because the app died under it (e.g. it crashed on the first of
+        several rotations, so the launcher, which stays in portrait, never rotates), that crash is the finding:
+        stop and let the verdict report it. Any other device failure is droid-monkey's and is raised."""
+        try:
+            do()
+            return True
+        except AdbError as e:
+            if self.device.pid() and not self.driver.crashes():
+                raise
+            self.driver.notes.append(f"the app died during step {i} ({str(e)[:120]}); the remaining steps were skipped")
+            return False
 
     def _start_trace(self):
         from .tools import perfetto

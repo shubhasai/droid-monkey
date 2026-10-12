@@ -191,12 +191,20 @@ class Loop:
 
     def attack(self, state: RunState) -> RunState:
         from .driver import NavigationError
+        from .tools.adb import AdbError
         try:
             res, wlog = self.with_watchdog(state, "the attack",
                                            lambda: SpecRunner(self.ctx, self.spec(state["current"])).run())
         except NavigationError as e:  # e.g. an earlier fix changed the UI on the way to this screen
             result = {"attack": state["current"]["name"], "outcome": "unreachable", "reason": str(e)}
             return {"result": result, "log": self.note(state, f"attack {result['attack']}: unreachable ({e})")}
+        except AdbError as e:  # the device failed, not the app (the app dying is a verdict, see SpecRunner)
+            try:
+                self.ctx.device.restore()
+            except AdbError:
+                pass
+            result = {"attack": state["current"]["name"], "outcome": "unreachable", "reason": f"device error: {e}"}
+            return {"result": result, "log": self.note(state, f"attack {result['attack']}: device error ({e})")}
         detail = res.exception or res.reason
         line = f"attack {res.attack}: {res.outcome} ({detail})" + (f" at {res.crash_signature}" if res.crash_signature else "")
         state = {**state, "log": state.get("log", []) + wlog}

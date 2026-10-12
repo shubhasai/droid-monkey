@@ -149,11 +149,19 @@ def _run_spec(ctx: Context, spec, name: str):
     """Run one attack. Explore does not replay every path up front, so this is where a path that no longer replays
     shows up: report it and go on with the next attack."""
     from .driver import NavigationError
+    from .tools.adb import AdbError
     runner = SpecRunner(ctx, spec)
     try:
         with theme.working(f"monkeying with the app: {name}..."):
             return runner.run()
-    except NavigationError as e:
+    except AdbError as e:
+        if not isinstance(e, NavigationError):  # the device or droid-monkey failed, not the app: skip this one
+            click.echo(f"  {theme.badge('skipped')} device error during '{name}': {str(e)[:200]}")
+            try:
+                ctx.device.restore()
+            except AdbError:
+                pass
+            return None
         if (runner.driver.dir / "before.png").exists():  # the screen was reached: a step of the attack itself failed
             click.echo(f"  {theme.badge('skipped')} on '{spec.screen}', a step of the attack failed: {str(e)[:200]}")
         else:

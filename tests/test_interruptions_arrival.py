@@ -61,3 +61,19 @@ def test_arrival_refuses_the_wrong_screen(monkeypatch):
 def test_maps_in_the_old_fingerprint_format_are_not_checked(monkeypatch):
     d, _ = _driver(monkeypatch, [PROMO])
     d.check_arrival(Target(name="x", steps=[], fingerprint=["android.widget.Button", "android:id/content"]))
+
+
+def test_an_app_that_dies_mid_fault_is_a_finding_not_a_harness_error():
+    from types import SimpleNamespace
+    from droid_monkey import runner as runner_mod
+    from droid_monkey.tools.adb import AdbError
+    r = runner_mod.SpecRunner.__new__(runner_mod.SpecRunner)
+    r.driver = SimpleNamespace(notes=[], crashes=lambda: ["crash"])
+    r.device = SimpleNamespace(pid=lambda: "")
+    def rotate():
+        raise AdbError("display never reached rotation 90")
+    assert r._survives(rotate, 1) is False and "the app died during step 1" in r.driver.notes[0]
+    r.device = SimpleNamespace(pid=lambda: "1234")
+    r.driver = SimpleNamespace(notes=[], crashes=lambda: [])
+    with pytest.raises(AdbError):             # alive and no crash: droid-monkey's own failure, raised
+        r._survives(rotate, 1)
