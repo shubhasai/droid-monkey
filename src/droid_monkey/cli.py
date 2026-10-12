@@ -281,6 +281,14 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
         from .tracing import load_keys
         load_keys()
         explorer = JevExplorer(ctx, load_flows(ctx.cfg.app_dir), save_path=paths.partial_map_path(ctx.cfg.app_dir))
+        if explorer.jev is None:  # asked for Jev: never fall back silently
+            raise click.ClickException("Jev is not available: " + "; ".join(explorer.notes)
+                                       + ". Add TYPESAFE_API_KEY to ~/.droid-monkey/.env; if it is there, reinstall "
+                                         "droid-monkey so typesafe-sdk is installed.")
+        from .tools import ui
+        ui.dump(ctx.adb)
+        theme.kv("jev", "on (TypeSafe jev-latest ranks each screen)")
+        theme.kv("screen reads", "fast (uiautomator2)" if ui._FAST else "classic uiautomator (slow): pip install uiautomator2")
         with theme.working("swinging through your screens (Jev picks each next tap)..."):
             smap = explorer.explore()
         smap.save(_map_path(ctx))
