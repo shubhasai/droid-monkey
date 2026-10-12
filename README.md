@@ -120,6 +120,24 @@ Every `run` and `attack` ends with a **visual report** (`dashboard.html`). Each 
 | Cost in neatlogs | Exact, as Claude Code reports it | Tokens only | Priced per call |
 | Entire checkpoints | ✅ | With `entire agent add codex` | ✗ (not yet) |
 
+
+## Signed-in screens (test accounts)
+
+droid-monkey never logs in, signs up, posts or pays on an app's **live** backend: every such tap is refused. To reach
+the screens behind a login, give it a **test account** and it signs in after every launch:
+
+```yaml
+# monkey.yaml
+entry_steps: ["tap text:Log in", "type username=${DM_TEST_USER}", "type password=${DM_TEST_PASSWORD}", "tap login_button"]
+entry_check: "text:Watchlist"   # something only a signed-in user sees: the run stops if the sign-in failed
+live_backend: false             # only when the app points at a test/staging backend
+```
+
+The credentials come from your environment or `~/.droid-monkey/.env`, never from `monkey.yaml`. While signed in,
+droid-monkey refuses to tap Log out / Sign out (so a run keeps its session), and the explorer is told to explore the
+signed-in screens without changing the account. Keep `live_backend: true` (the default) unless the build talks to a
+test backend: then sign-up, posting and paying stay refused even while signed in.
+
 ## Results
 
 ### architecture-samples (Google): one real bug, three approaches

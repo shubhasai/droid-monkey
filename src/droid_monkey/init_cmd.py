@@ -124,7 +124,12 @@ def write_config(app_dir: Path, d: Detected) -> Path:
         +
         "# Optional:\n"
         "# agent: auto          # coding agent: auto (Claude Code, else Codex, else Anthropic API) | claude | codex | api\n"
-        "# entry_steps: [\"tap text:Log in\", \"fill\", \"tap login_button\"]   # apps behind a login\n"
+        "# Signed-in screens: log in with a TEST account after every launch. Credentials come from your environment\n"
+        "# or ~/.droid-monkey/.env, never from this file. Use a test or staging backend, and only then live_backend: false.\n"
+        "# entry_steps: [\"tap text:Log in\", \"type username=${DM_TEST_USER}\", \"type password=${DM_TEST_PASSWORD}\",\n"
+        "#               \"tap login_button\"]\n"
+        "# entry_check: \"text:Watchlist\"   # something only a signed-in user sees\n"
+        "# live_backend: false             # only for a test backend: lets droid-monkey post, pay, sign up...\n"
         "# fill_values: {email: test@example.com}\n"
     )
     return path

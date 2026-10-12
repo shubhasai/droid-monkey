@@ -50,6 +50,25 @@ INTERRUPTION_CLOSE = re.compile(r"^(close|dismiss|not now|no thanks|maybe later|
                                 r"close (dialog|sheet|banner|promo))$", re.I)
 
 
+_VAR = re.compile(r"\$\{(\w+)\}")
+LOGOUT = re.compile(r"\b(log\s*out|sign\s*out|logout|signout|switch account|remove account)\b", re.I)
+
+
+def expand_secrets(step: str) -> str:
+    """`${DM_TEST_PASSWORD}` in an entry step comes from the environment or ~/.droid-monkey/.env, so test-account
+    credentials never live in monkey.yaml (which is committed with the app)."""
+    import os
+    missing = [v for v in _VAR.findall(step) if not os.environ.get(v)]
+    if missing:
+        from .tracing import load_keys
+        load_keys()
+        missing = [v for v in missing if not os.environ.get(v)]
+    if missing:
+        raise NavigationError(f"entry step needs {', '.join(missing)}: set it in your environment or in "
+                              "~/.droid-monkey/.env (never in monkey.yaml)")
+    return _VAR.sub(lambda m: os.environ[m.group(1)], step)
+
+
 class NavigationError(AdbError):
     pass
 
@@ -87,8 +106,11 @@ class AppDriver:
         self.device.launch()
         self.device.set_rotation(0)  # Android 16 may restore the app's last orientation on launch
         for step in self.cfg.entry_steps:  # written by the developer (e.g. a test-account login): trusted
-            self.step(step, trusted=True)
+            self.step(expand_secrets(step), trusted=True)
             self.settle(timeout=self.NAV_SETTLE)
+        if self.cfg.entry_check and ui.wait_for(self.adb, self.cfg.entry_check, timeout=15) is None:
+            raise NavigationError(f"entry_check '{self.cfg.entry_check}' not found after entry_steps: the sign-in did "
+                                  "not work (credentials, a captcha, a changed screen); not continuing signed out")
 
     def target(self, screen_id: str) -> Target:
         found = self.ctx.targets.get(screen_id)
@@ -126,8 +148,13 @@ class AppDriver:
 
     def _guard(self, node, screen, trusted: bool) -> None:
         """Refuse a tap that would act on the app's live backend (see safety.py)."""
-        from .safety import outward_reason
-        if trusted or not self.cfg.live_backend:
+        from .safety import labels, outward_reason
+        if trusted:
+            return
+        if self.cfg.entry_steps and any(LOGOUT.search(x) for x in labels(node, screen)):
+            raise OutwardActionRefused("refused to log out: droid-monkey signed in with the test account from "
+                                       "entry_steps and needs that session for the rest of the run")
+        if not self.cfg.live_backend:
             return
         reason = outward_reason(node, screen, self.cfg.allow_actions)
         if reason:

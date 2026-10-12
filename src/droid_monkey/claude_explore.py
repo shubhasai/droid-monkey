@@ -104,6 +104,10 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
     screens = inventory.build(app_dir, cfg.package, cfg.module, cfg.variant)
     inventory.save(screens, out.parent / "screens.json")
     checklist = inventory.brief(screens)
+    signed_in = ("\nSigned in: droid-monkey signs in with the developer's TEST account after every launch_fresh "
+                 "(entry_steps in monkey.yaml), so screens behind the login are reachable: explore them. Never log "
+                 "out, switch or add accounts, or change the account's settings (password, email); droid-monkey "
+                 "refuses log-out taps.\n") if cfg.entry_steps else ""
     limits = (f"\nLimits for this run: {minutes:g} minutes and at most {max_screens} screens. Reach the most important "
               f"screens first (the main flows above), and call finish when a tool result says LIMIT.\n")
     started = time.time()
@@ -119,7 +123,7 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
         try:
             result = agents.run(
                 agent,
-                PROMPT.format(profile=_profile_brief(profile), flows=flows_text + limits, checklist=checklist),
+                PROMPT.format(profile=_profile_brief(profile), flows=flows_text + signed_in + limits, checklist=checklist),
                 cwd=work,
                 allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
                 servers=[device],
