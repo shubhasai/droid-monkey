@@ -25,6 +25,13 @@ from .tools.device import Device
 
 BUILTIN = specs_mod.builtin_templates()
 
+def _interactive() -> bool:
+    """Someone can answer prompts: a terminal, or the dashboard, which runs commands with a pipe it answers from
+    the page (DROID_MONKEY_INTERACTIVE=1)."""
+    import os
+    return sys.stdin.isatty() or os.environ.get("DROID_MONKEY_INTERACTIVE") == "1"
+
+
 APP_DIR = click.option("--app-dir", type=click.Path(path_type=Path, file_okay=False), default=".",
                        help="The app's repo (holds monkey.yaml).")
 
@@ -299,7 +306,7 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: fl
         theme.header("you drive, the monkey watches", "(o.o)")
         click.echo("  The app restarts from a clean state. Use it on the emulator: tap, type, scroll, press Back.\n"
                    "  Every step, screen and screenshot is recorded. Press Enter here when you are done.\n")
-        smap = rec.run(lambda: input())
+        smap = rec.run(lambda: input("Press Enter here when you are done: "))
         smap.save(_map_path(ctx))
         theme.ok(f"recorded {len(rec.path)} steps and {len(smap.screens)} screens")
         theme.path_line("steps", rec.d.dir / "steps")
@@ -698,7 +705,7 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
         theme.warn("--auto-fix: droid-monkey will change code on its run branch without asking you first")
 
     def ask(proposal: dict) -> str:
-        if sys.stdin.isatty():
+        if _interactive():
             return approval.ask_terminal(proposal)
         click.echo(approval.render(proposal))
         theme.warn("not a terminal, so not fixing without approval: rerun with --auto-fix to fix without asking")
@@ -766,7 +773,7 @@ def ux(app_dir: Path, apply: bool, agent: str, model: str, review_model: str) ->
 
     def ask(f) -> str:
         click.echo(ux_mod.render(f))
-        if not sys.stdin.isatty():
+        if not _interactive():
             click.echo(click.style("not a terminal: not changing code", fg="yellow"))
             return "no"
         answer = click.prompt("Make this change? [y]es / [n]o / [a]ll remaining", default="n",

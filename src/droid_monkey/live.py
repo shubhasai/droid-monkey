@@ -5,10 +5,17 @@ server every few seconds whether anything in the folder changed; when it did (a 
 screen, the UX audit finished), the page refreshes itself. So the dashboard is always in sync with the folder:
 runs and their evidence, the screen map and screenshots, the analysis, the user flows, the saved attacks and the
 UX audit. It binds to 127.0.0.1 only and serves files from inside the folder only.
+
+Commands: the Commands page runs any droid-monkey command (forms built from the CLI itself, see jobs.py) as a job
+whose output streams into the page; prompts such as "Fix it?" are answered with buttons. Starting, answering or
+stopping a job needs the per-server token embedded in the dashboard's pages, and requests from other origins are
+refused, so no other web page can run commands on this machine.
 """
 
 import hashlib
+import hmac
 import html
+import secrets
 import json
 import mimetypes
 import re
@@ -44,7 +51,7 @@ def version(root: Path) -> str:
             st = p.stat()
         except OSError:
             continue
-        if p.is_file() and not p.name.endswith(("-wal", "-shm", "-journal")):
+        if p.is_file() and not p.name.endswith(("-wal", "-shm", "-journal")) and p.parent.name != "jobs":
             h.update(f"{p.relative_to(root)}|{st.st_size}|{st.st_mtime_ns}\n".encode())
     return h.hexdigest()[:16]
 
@@ -432,12 +439,94 @@ def page_files(root: Path, app: Path) -> str:
            f'<th class="num">Modified</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
 
 
-PAGES = {"/": ("Overview", page_overview), "/runs": ("Runs", page_runs), "/screens": ("Screens", page_screens),
+def _field(cmd, p) -> str:
+    fid = f"{cmd.path.replace(' ', '-')}-{p.name}"
+    tip = f' title="{esc(p.help)}"' if p.help else ""
+    hint = f'<span class="fhelp">{esc(p.help)}</span>' if p.help else ""
+    if p.kind == "flag":
+        return (f'<label class="fflag"{tip}><input type="checkbox" name="{esc(p.name)}"{" checked" if p.default else ""}>'
+                f'<span><code>{esc(p.on if not p.default else (p.off or p.on))}</code>'
+                f'{" (on by default)" if p.default else ""}</span>{hint}</label>')
+    if p.kind == "choice":
+        opts = "".join(f'<option{" selected" if c == p.default else ""}>{esc(c)}</option>' for c in [""] + p.choices)
+        control = f'<select name="{esc(p.name)}" id="{fid}">{opts}</select>'
+    else:
+        typ = {"int": "number", "float": "number"}.get(p.kind, "text")
+        step = ' step="any"' if p.kind == "float" else ""
+        ph = f' placeholder="{esc(str(p.default))}"' if p.default not in (None, "") else ""
+        control = (f'<input type="{typ}"{step} name="{esc(p.name)}" id="{fid}"{ph}'
+                   f'{" required" if p.required else ""}>')
+    label = p.label if p.kind != "argument" else p.label.upper()
+    return f'<label class="ffield" for="{fid}"{tip}><span><code>{esc(label)}</code>{" *" if p.required else ""}</span>{control}{hint}</label>'
+
+
+def page_commands(root: Path, app: Path, jobs=None) -> str:
+    from . import jobs as jobs_mod
+    cmds = jobs_mod.commands()
+    busy = jobs.busy() if jobs else None
+    groups = []
+    for title, names in jobs_mod.GROUPS:
+        cards = []
+        for n in names:
+            c = cmds.get(n)
+            if not c:
+                continue
+            fields = "".join(_field(c, p) for p in c.params)
+            warn = ('<p class="danger">Publishes: pushes the run branch and opens a pull request on GitHub. '
+                    'You will be asked to confirm.</p>') if c.publishes else ""
+            cards.append(f"""<form class="cmd" data-cmd="{esc(c.path)}" data-publishes="{1 if c.publishes else 0}">
+<div class="cmd-head"><h3><code>droid-monkey {esc(c.path)}</code></h3>
+<button type="submit" class="run"{" disabled" if busy else ""}>Run</button></div>
+<p class="hint">{esc(c.help)}</p>{warn}{f'<div class="fields">{fields}</div>' if fields else ''}
+<p class="preview"><code></code></p></form>""")
+        groups.append(f'<section class="cgroup"><h2>{esc(title)}</h2><div class="cgrid">{"".join(cards)}</div></section>')
+    hist = jobs.history()[:20] if jobs else []
+    rows = "".join(f'<tr><td><a href="/job/{esc(j.id)}"><code>{esc(j.command)}</code></a></td>'
+                   f'<td><code class="args">{esc(" ".join(j.args[len(j.command.split()):]))}</code></td>'
+                   f'<td>{_jstatus(j.status)}</td><td class="num">{time.strftime("%m-%d %H:%M", time.localtime(j.started))}</td>'
+                   f'<td class="num">{_dur(j)}</td></tr>' for j in hist)
+    running = (f'<p class="busy">Running now: <a href="/job/{esc(busy.id)}"><code>{esc(busy.command)}</code></a>. '
+               'Commands share the emulator, so one runs at a time.</p>') if busy else ""
+    return f"""<header class="top"><h1>Commands</h1><p class="meta">Every droid-monkey command, run in <code>{esc(str(app))}</code>.
+Options come from the CLI itself; leave a field empty for its default.</p>{running}</header>
+{''.join(groups)}
+<section class="panel"><h2>Recent jobs</h2>{('<div class="scroll"><table><thead><tr><th>Command</th><th>Options</th><th>Status</th><th class="num">Started</th><th class="num">Took</th></tr></thead><tbody>' + rows + '</tbody></table></div>') if rows else '<p class="hint">None yet.</p>'}</section>"""
+
+
+def _jstatus(status: str) -> str:
+    tone = {"done": "ok", "running": "run", "waiting": "warn", "failed": "bad", "stopped": "idle"}.get(status, "idle")
+    return f'<span class="chip c-{tone}">{esc(status)}</span>'
+
+
+def _dur(j) -> str:
+    sec = (j.ended or time.time()) - j.started
+    return f"{sec / 60:.1f} min" if sec >= 60 else f"{sec:.0f} s"
+
+
+def page_job(root: Path, app: Path, job_id: str, jobs=None) -> str:
+    job = jobs.get(job_id) if jobs else None
+    if not job:
+        return "<h1>Not found</h1>"
+    return f"""<header class="top"><p class="eyebrow"><a href="/commands">Commands</a> / job</p>
+<h1><code>droid-monkey {esc(" ".join(job.args))}</code></h1>
+<p class="meta">started {time.strftime("%H:%M:%S", time.localtime(job.started))} · <span id="jstatus">{_jstatus(job.status)}</span>
+· <span id="jdur">{_dur(job)}</span></p></header>
+<div class="ask" id="ask" hidden><p class="q" id="question"></p><div class="answers">
+  <button type="button" data-a="y" class="yes">Yes</button><button type="button" data-a="n">No</button>
+  <button type="button" data-a="a">All remaining</button><button type="button" data-a="">Enter</button>
+  <input id="free" placeholder="or type an answer"><button type="button" id="send">Send</button></div></div>
+<div class="console-bar"><label><input type="checkbox" id="follow" checked> follow output</label>
+<button type="button" id="stop" class="stopbtn"{"" if job.status in ("running", "waiting") else " hidden"}>Stop</button></div>
+<pre class="console" id="console"></pre>
+<script>const JOB={json.dumps(job.id)};const NO_RELOAD=true;</script>"""
+
+
+PAGES = {"/": ("Overview", page_overview), "/commands": ("Commands", page_commands), "/runs": ("Runs", page_runs), "/screens": ("Screens", page_screens),
          "/analysis": ("Analysis", page_analysis), "/flows": ("Flows", page_flows),
          "/attacks": ("Attacks", page_attacks), "/ux": ("UX audit", page_ux), "/files": ("Files", page_files)}
 
 
-def layout(path: str, body: str, title: str, ver: str, app: Path) -> str:
+def layout(path: str, body: str, title: str, ver: str, app: Path, token: str = "", busy=None) -> str:
     nav = "".join(f'<li><a href="{p}"{" class=on" if (path == p or (p != "/" and path.startswith(p))) else ""}>{t}</a></li>'
                   for p, (t, _) in PAGES.items())
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -447,10 +536,12 @@ def layout(path: str, body: str, title: str, ver: str, app: Path) -> str:
 <style>{CSS}</style></head><body><div class="frame">
 <nav class="rail"><p class="brand">droid-monkey</p><p class="appname">{esc(app.name)}</p><ol>{nav}</ol>
 <p class="sync" title="The page checks the .droid-monkey folder every {POLL_MS / 1000:g} s and refreshes when it changes">
-<span class="pulse"></span><span class="sync-text">live · in sync</span></p></nav>
+<span class="pulse"></span><span class="sync-text">live · in sync</span></p>
+<a class="jobpill" href="{f'/job/{esc(busy.id)}' if busy else '#'}"{'' if busy else ' hidden'}><span class="spin"></span>
+<span class="jp-cmd">{esc(busy.command) if busy else ''}</span><b class="jp-st">{esc(busy.status) if busy else ''}</b></a></nav>
 <main>{body}</main></div>
 <div class="lightbox" hidden><button type="button" class="close" aria-label="Close">×</button><img alt=""></div>
-<script>const VERSION={json.dumps(ver)};{JS}</script></body></html>"""
+<script>const VERSION={json.dumps(ver)};const TOKEN={json.dumps(token)};{JS}{JOB_JS}</script></body></html>"""
 
 
 # ---- server -------------------------------------------------------------------------------------------
@@ -458,6 +549,8 @@ def layout(path: str, body: str, title: str, ver: str, app: Path) -> str:
 class _Handler(BaseHTTPRequestHandler):
     root: Path
     app: Path
+    jobs = None
+    token: str = ""
 
     def log_message(self, *a):  # quiet: the terminal shows the URL, not every request
         pass
@@ -476,7 +569,9 @@ class _Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         try:
             if path == "/api/version":
-                return self._send(200, json.dumps({"version": version(self.root)}).encode(), "application/json")
+                busy = self.jobs.busy() if self.jobs else None
+                return self._send(200, json.dumps({"version": version(self.root), "job": busy.public() if busy else None}
+                                                  ).encode(), "application/json")
             if path.startswith("/files/"):
                 return self._file(path[len("/files/"):])
             if path.startswith("/thumb/"):
@@ -484,16 +579,74 @@ class _Handler(BaseHTTPRequestHandler):
                 if not target:
                     return self._send(404, b"not found", "text/plain")
                 return self._send(200, thumbnail(target), "image/jpeg")
+            if path.startswith("/api/jobs/"):
+                return self._job_poll(path[len("/api/jobs/"):].strip("/"))
             if path.startswith("/run/"):
                 body, title = page_run(self.root, self.app, path[len("/run/"):].strip("/")), "Run"
+            elif path.startswith("/job/"):
+                body, title = page_job(self.root, self.app, path[len("/job/"):].strip("/"), self.jobs), "Job"
+            elif path == "/commands":
+                body, title = page_commands(self.root, self.app, self.jobs), "Commands"
             elif path in PAGES:
                 title, fn = PAGES[path]
                 body = fn(self.root, self.app)
             else:
                 return self._send(404, b"not found", "text/plain")
-            self._send(200, layout(path, body, title, version(self.root), self.app).encode(), "text/html; charset=utf-8")
+            busy = self.jobs.busy() if self.jobs else None
+            self._send(200, layout(path, body, title, version(self.root), self.app, self.token, busy).encode(),
+                       "text/html; charset=utf-8")
         except Exception as e:  # a half-written file mid-run: show it, the next refresh will be fine
             self._send(500, f"<pre>{esc(repr(e))}</pre>".encode(), "text/html")
+
+    # ---- commands -----------------------------------------------------------------------------------------
+    def _trusted(self) -> bool:
+        """A request from this dashboard's own pages: the per-server token, from our own origin, to our own host
+        name (which also defeats DNS rebinding)."""
+        port = self.server.server_address[1]
+        ours = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        return (hmac.compare_digest(self.headers.get("X-DM-Token", ""), self.token) and self.headers.get("Host") in ours
+                and (origin is None or origin.split("://", 1)[-1] in ours))
+
+    def _json_body(self) -> dict:
+        n = int(self.headers.get("Content-Length") or 0)
+        return json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+
+    def do_POST(self):  # noqa: N802
+        path = urlparse(self.path).path
+        if not self.jobs or not self._trusted():
+            return self._send(403, b'{"error": "forbidden"}', "application/json")
+        try:
+            body = self._json_body()
+            if path == "/api/jobs":
+                from . import jobs as jobs_mod
+                cmd = jobs_mod.commands().get(body.get("command", ""))
+                if not cmd:
+                    raise ValueError("unknown command")
+                if cmd.publishes and body.get("confirm") is not True:
+                    raise ValueError("this command publishes; confirm it first")
+                job = self.jobs.start(cmd.path, jobs_mod.argv(cmd, body.get("values") or {}))
+                return self._send(200, json.dumps(job.public()).encode(), "application/json")
+            m = re.fullmatch(r"/api/jobs/([\w.-]+)/(answer|stop)", path)
+            if m:
+                if m.group(2) == "answer":
+                    self.jobs.answer(m.group(1), str(body.get("text", "")))
+                else:
+                    self.jobs.stop(m.group(1))
+                return self._send(200, b'{"ok": true}', "application/json")
+            return self._send(404, b'{"error": "not found"}', "application/json")
+        except (ValueError, RuntimeError) as e:
+            return self._send(400, json.dumps({"error": str(e)}).encode(), "application/json")
+
+    def _job_poll(self, job_id: str) -> None:
+        job = self.jobs.get(job_id) if self.jobs else None
+        if not job:
+            return self._send(404, b'{"error": "not found"}', "application/json")
+        q = dict(x.split("=", 1) for x in (urlparse(self.path).query or "").split("&") if "=" in x)
+        offset = int(q.get("offset", 0) or 0)
+        log = self.jobs.log(job_id)
+        return self._send(200, json.dumps({**job.public(), "output": log[offset:], "offset": len(log),
+                                           "took": _dur(job)}).encode(), "application/json")
 
     def _inside(self, rel: str) -> Path | None:
         """The file at `rel` if it is inside the folder; None for anything else (../, absolute paths, links out)."""
@@ -527,8 +680,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def serve(app_dir: Path, port: int = 8787, open_browser: bool = True) -> None:
+    from .jobs import Jobs
     root = paths.data_dir(app_dir)
-    handler = type("Handler", (_Handler,), {"root": root, "app": app_dir.resolve()})
+    handler = type("Handler", (_Handler,), {"root": root, "app": app_dir.resolve(), "jobs": Jobs(app_dir),
+                                            "token": secrets.token_urlsafe(24)})
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"droid-monkey dashboard for {root.resolve()}\n  {url}  (live: it follows the folder; Ctrl+C to stop)", flush=True)
@@ -608,6 +763,28 @@ pre{background:var(--sunken);border-radius:8px;padding:12px;overflow-x:auto;font
 details summary{cursor:pointer;list-style:none}details summary::-webkit-details-marker{display:none}details summary h2{display:inline}
 .lightbox{position:fixed;inset:0;background:rgba(10,14,18,.86);display:grid;place-items:center;z-index:9;padding:24px}
 .lightbox img{max-width:100%;max-height:92vh;border-radius:12px}.lightbox .close{position:absolute;top:12px;right:16px;font-size:30px;color:#fff;background:none;border:0;cursor:pointer}
+.cgroup{display:grid;gap:10px}.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.cmd{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:8px;align-content:start;min-width:0}
+.cmd-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.cmd-head h3 code{font-size:14px}
+button.run{font:600 13px var(--body);background:var(--accent);color:var(--bg);border:0;border-radius:7px;padding:6px 16px;cursor:pointer}
+button.run:disabled{opacity:.5;cursor:not-allowed}
+.fields{display:grid;gap:8px}.ffield{display:grid;gap:3px;font-size:13px}.ffield input,.ffield select{font:14px var(--body);padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:0}
+.fflag{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;align-items:center;font-size:13px}.fflag .fhelp{grid-column:2}
+.fhelp{color:var(--muted);font-size:12px}.preview{margin:0;background:var(--sunken);border-radius:6px;padding:6px 8px}.preview code{font-size:12px}
+.danger{color:var(--bad);font-size:13px;margin:0}.err{color:var(--bad);font-size:13px;margin:0}.busy{color:var(--warn);margin:4px 0 0;font-size:14px}
+.c-run{color:var(--accent)}.c-warn{color:var(--warn)}code.args{color:var(--muted)}
+.jobpill{display:flex;align-items:center;gap:8px;margin-top:10px;padding:8px 10px;border:1px solid var(--accent);border-radius:8px;text-decoration:none;color:var(--fg);font:12px var(--mono)}
+.jobpill b{margin-left:auto;font:600 11px var(--body);color:var(--accent)}
+.spin{width:10px;height:10px;border-radius:50%;border:2px solid var(--accent);border-right-color:transparent;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.console-bar{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
+.console{height:calc(100vh - 290px);min-height:360px;overflow:auto;background:#0b0f14;color:#d6dde6;border-radius:10px;padding:14px 16px;font:12.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word}
+.stopbtn{font:600 13px var(--body);color:var(--bad);border:1px solid var(--bad);background:none;border-radius:7px;padding:5px 14px;cursor:pointer}
+.ask{border:2px solid var(--warn);background:var(--surface);border-radius:12px;padding:14px 16px;display:grid;gap:10px}
+.ask .q{margin:0;font:600 15px var(--body)}.answers{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.answers button{font:600 13px var(--body);border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:7px;padding:6px 16px;cursor:pointer}
+.answers button.yes{background:var(--ok);color:var(--bg);border-color:var(--ok)}
+.answers input{font:14px var(--body);padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 @media (max-width:1050px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (max-width:820px){.frame{grid-template-columns:minmax(0,1fr);padding-inline:16px}.rail{position:static}.rail ol{display:flex;flex-wrap:wrap}
   .two{grid-template-columns:minmax(0,1fr)}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -619,8 +796,12 @@ const sync=document.querySelector('.sync'),syncText=document.querySelector('.syn
 try{const y=sessionStorage.getItem('dm-scroll:'+location.pathname);if(y){scrollTo(0,+y);sessionStorage.removeItem('dm-scroll:'+location.pathname)}}catch(e){}
 let seen=VERSION;
 async function check(){
-  try{const r=await fetch('/api/version',{cache:'no-store'});const v=(await r.json()).version;
+  try{const r=await fetch('/api/version',{cache:'no-store'});const d=await r.json(),v=d.version;
+    const pill=document.querySelector('.jobpill');
+    if(pill){pill.hidden=!d.job;if(d.job){pill.href='/job/'+d.job.id;pill.querySelector('.jp-cmd').textContent=d.job.command;
+      pill.querySelector('.jp-st').textContent=d.job.status}}
     sync.classList.remove('stale');
+    if(typeof NO_RELOAD!=='undefined'){setTimeout(check,""" + str(POLL_MS) + """);return}
     if(v!==VERSION&&v!==seen){seen=v;syncText.textContent='changing…';setTimeout(check,1500);return}  // still being written
     if(v!==VERSION){syncText.textContent='updated · refreshing';
       try{sessionStorage.setItem('dm-scroll:'+location.pathname,String(scrollY))}catch(e){}
@@ -638,3 +819,50 @@ document.querySelectorAll('.scard').forEach(c=>c.querySelectorAll('.seg button')
   c.querySelectorAll('.seg button').forEach(x=>x.classList.toggle('on',x===b));
   c.querySelector('.shot').hidden=b.dataset.show!=='shot';c.querySelector('.heat').hidden=b.dataset.show!=='heat'})));
 """
+
+JOB_JS = r"""
+async function api(url, body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-DM-Token':TOKEN},body:JSON.stringify(body||{})});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.statusText);return j}
+// Commands page: a live preview of the command line, and Run
+function values(form){const v={};form.querySelectorAll('input,select').forEach(i=>{v[i.name]=i.type==='checkbox'?i.checked:i.value});return v}
+function preview(form){const parts=['droid-monkey',form.dataset.cmd];const args=[];
+  form.querySelectorAll('input,select').forEach(i=>{const lab=i.closest('label').querySelector('code').textContent;
+    if(i.type==='checkbox'){const on=i.checked,def=i.closest('label').textContent.includes('on by default');
+      if(on&&!def)parts.push(lab);if(!on&&def)parts.push(lab.startsWith('--no-')?lab:lab)}
+    else if(i.value){if(lab===lab.toUpperCase())args.push(JSON.stringify(i.value));else parts.push(lab,i.value)}});
+  form.querySelector('.preview code').textContent=parts.concat(args).join(' ')}
+document.querySelectorAll('form.cmd').forEach(f=>{preview(f);f.addEventListener('input',()=>preview(f));
+  f.addEventListener('submit',async e=>{e.preventDefault();const b=f.querySelector('button.run');
+    let confirm=false;
+    if(f.dataset.publishes==='1'){
+      if(!f.querySelector('.confirm')){const c=document.createElement('p');c.className='confirm danger';
+        c.innerHTML='This pushes to GitHub and opens a pull request. Click <b>Run</b> again to confirm.';f.append(c);return}
+      confirm=true}
+    b.disabled=true;b.textContent='Starting…';
+    try{const j=await api('/api/jobs',{command:f.dataset.cmd,values:values(f),confirm});location.href='/job/'+j.id}
+    catch(err){b.disabled=false;b.textContent='Run';let m=f.querySelector('.err');if(!m){m=document.createElement('p');m.className='err';f.append(m)}m.textContent=err.message}})});
+// Job page: stream the output, show the question, answer it, stop
+if(typeof JOB!=='undefined'){
+  const con=document.getElementById('console'),ask=document.getElementById('ask'),q=document.getElementById('question'),
+        st=document.getElementById('jstatus'),dur=document.getElementById('jdur'),stop=document.getElementById('stop'),
+        follow=document.getElementById('follow');let off=0,last='';
+  const tone={done:'ok',running:'run',waiting:'warn',failed:'bad',stopped:'idle'};
+  async function poll(){
+    try{const r=await fetch('/api/jobs/'+encodeURIComponent(JOB)+'?offset='+off,{cache:'no-store'});const j=await r.json();
+      if(j.output){con.textContent+=j.output;off=j.offset;if(follow.checked)con.scrollTop=con.scrollHeight}
+      if(j.status!==last){st.innerHTML='<span class="chip c-'+(tone[j.status]||'idle')+'">'+j.status+'</span>';last=j.status}
+      dur.textContent=j.took;
+      ask.hidden=j.status!=='waiting';if(j.status==='waiting')q.textContent=j.waiting;
+      stop.hidden=!(j.status==='running'||j.status==='waiting');
+      if(j.status==='running'||j.status==='waiting')setTimeout(poll,700)}
+    catch(e){setTimeout(poll,2000)}}
+  poll();
+  async function answer(t){ask.hidden=true;try{await api('/api/jobs/'+encodeURIComponent(JOB)+'/answer',{text:t})}catch(e){alert(e.message)}}
+  ask.querySelectorAll('button[data-a]').forEach(b=>b.addEventListener('click',()=>answer(b.dataset.a)));
+  document.getElementById('send').addEventListener('click',()=>{const i=document.getElementById('free');answer(i.value);i.value=''});
+  stop.addEventListener('click',async()=>{stop.disabled=true;stop.textContent='Stopping…';
+    try{await api('/api/jobs/'+encodeURIComponent(JOB)+'/stop')}catch(e){stop.disabled=false;stop.textContent='Stop'}});
+}
+"""
+
