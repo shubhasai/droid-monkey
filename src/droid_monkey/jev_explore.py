@@ -66,9 +66,10 @@ def flows_text(flows: list[dict]) -> str:
 
 
 class JevExplorer(Explorer):
-    def __init__(self, ctx, flows: list[dict], top_k: int = 4, max_screens: int = 30, budget_seconds: float = 1500):
+    def __init__(self, ctx, flows: list[dict], top_k: int = 3, max_screens: int = 30, budget_seconds: float = 1500,
+                 max_depth: int = 10, save_path=None):
         super().__init__(ctx, max_screens=max_screens, max_actions=255, budget_seconds=budget_seconds)
-        self.top_k = top_k
+        self.top_k, self.max_depth, self.save_path = top_k, max_depth, save_path
         self.jev = None
         if os.environ.get("TYPESAFE_API_KEY"):
             try:
@@ -77,7 +78,7 @@ class JevExplorer(Explorer):
                 self.notes.append(f"jev unavailable ({e}); exploring without ranking")
         else:
             self.notes.append("TYPESAFE_API_KEY not set: exploring without Jev ranking")
-        self.current: str | None = None
+        self.replays = 0  # relaunches needed to get back to a screen (what made breadth-first exploring loop)
 
     # Stay on the screen; only replay when the app is elsewhere (Back first, it is cheaper).
     def go_to(self, info: ScreenInfo) -> ui.Screen:
@@ -85,9 +86,10 @@ class JevExplorer(Explorer):
         if _similar(screen.fingerprint(self.cfg.package), frozenset(info.fingerprint)):
             return screen
         self.adb.shell("input keyevent 4")
-        screen, _, _ = self.d.settle()
+        screen, _, _ = self.d.settle(timeout=4)
         if _similar(screen.fingerprint(self.cfg.package), frozenset(info.fingerprint)):
             return screen
+        self.replays += 1
         return super().go_to(info)
 
     def candidates(self, info: ScreenInfo, screen: ui.Screen) -> list[ActionInfo]:
@@ -118,41 +120,56 @@ class JevExplorer(Explorer):
         return chosen + blocked
 
     def explore(self):
+        """Depth first: a tap that opens a new screen is explored right away, from where the app already is, so the
+        app is only relaunched and the path replayed when Back cannot return to a screen."""
         self.d.fresh(clear_data=self.clear_data)
         self.d.settle()
         root, self.baseline, _ = self.d.settle()
         self.map.baseline_seconds = self.baseline
         self.map.mode = "jev" if self.jev else "fast"
-        queue = [self.register(root, [])]
-        explored: set[str] = set()
-        while queue and time.time() - self.started < self.budget:
-            sid = queue.pop(0)
-            if sid in explored:
-                continue
-            explored.add(sid)
-            info = self.map.screens[sid]
-            try:
-                screen = self.go_to(info)
-            except (NavigationError, AdbError) as e:
-                self.notes.append(f"{sid}: {e}")
-                continue
-            info.actions = self.candidates(info, screen)
-            for action in info.actions:
-                if action.effect == "blocked" or time.time() - self.started > self.budget:
-                    continue
-                try:
-                    new_sid = self.try_action(info, action)
-                except NavigationError as e:  # includes a tap the live-backend guard refused
-                    action.effect = "blocked" if "live backend" in str(e) else "not_found"
-                    self.notes.append(f"{info.id} -> {action.label[:40]}: {str(e)[:120]}")
-                    continue
-                if new_sid and new_sid not in explored and new_sid not in queue and len(self.map.screens) <= self.max_screens:
-                    queue.append(new_sid)
+        self.explored: set[str] = set()
+        self.replays = 0
+        self._visit(self.register(root, []), depth=0)
         self.map.seconds = round(time.time() - self.started, 1)
+        self.notes.append(f"{len(self.map.screens)} screens, {self.replays} relaunches to replay a path")
         if self.jev:
             self.notes.append(f"jev: {self.jev.calls} calls, {self.jev.seconds / max(1, self.jev.calls):.2f}s each")
+        self._save()
         try:
             self.device.restore()
         except AdbError as e:
             self.notes.append(f"restore: {e}")
         return self.map
+
+    def _save(self) -> None:
+        if self.save_path:
+            self.map.seconds = round(time.time() - self.started, 1)
+            self.map.save(self.save_path)
+
+    def _visit(self, sid: str, depth: int) -> None:
+        if sid in self.explored or depth > self.max_depth or len(self.explored) >= self.max_screens \
+                or time.time() - self.started > self.budget:
+            return
+        self.explored.add(sid)
+        info = self.map.screens[sid]
+        try:
+            screen = self.go_to(info)
+        except (NavigationError, AdbError) as e:
+            self.notes.append(f"{sid}: {e}")
+            return
+        info.actions = self.candidates(info, screen)
+        self._save()
+        for action in info.actions:
+            if action.effect == "blocked" or time.time() - self.started > self.budget:
+                continue
+            try:
+                new_sid = self.try_action(info, action)
+            except NavigationError as e:  # includes a tap the live-backend guard refused
+                action.effect = "blocked" if "live backend" in str(e) else "not_found"
+                self.notes.append(f"{info.id} -> {action.label[:40]}: {str(e)[:120]}")
+                continue
+            except AdbError as e:
+                self.notes.append(f"{info.id} -> {action.label[:40]}: {str(e)[:120]}")
+                continue
+            if new_sid and new_sid not in self.explored:
+                self._visit(new_sid, depth + 1)  # the app is on the new screen now: no relaunch needed

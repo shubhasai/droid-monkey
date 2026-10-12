@@ -264,7 +264,7 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
         from .jev_explore import JevExplorer
         from .tracing import load_keys
         load_keys()
-        explorer = JevExplorer(ctx, load_flows(ctx.cfg.app_dir))
+        explorer = JevExplorer(ctx, load_flows(ctx.cfg.app_dir), save_path=paths.partial_map_path(ctx.cfg.app_dir))
         with theme.working("swinging through your screens (Jev picks each next tap)..."):
             smap = explorer.explore()
         smap.save(_map_path(ctx))
