@@ -34,6 +34,10 @@ def partial_map_path(app_dir: Path) -> Path:
     return data_dir(app_dir) / "screen-map.partial.json"
 
 
+def inventory_path(app_dir: Path) -> Path:
+    return data_dir(app_dir) / "screens.json"
+
+
 def flows_path(app_dir: Path) -> Path:
     return data_dir(app_dir) / "flows.json"
 

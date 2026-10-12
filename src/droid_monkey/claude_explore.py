@@ -26,24 +26,32 @@ The current directory is a source-only copy of the app. Static profile:
 You have Read, Grep and Glob over the source, and device tools (mcp__device__*) that drive the running app on the
 emulator. Every action you take on the device is recorded and must be replayable, so act only through those tools.
 
+Screens in the code (a static pass over the whole repo: every activity in the manifest, and the fragments, dialogs
+and navigation routes some code opens; "opened from" is the code that opens it, "near labels" the user-visible
+text referenced right there, i.e. what to look for on screen):
+{checklist}
+
+This list is your checklist. Do not re-derive it: read code only to answer a specific question (what a label is,
+what data a screen needs, which validation a form has).
+
 Work in this order:
-1. Read the code first: find the launcher activity and how navigation works (nav graph, routes, fragments,
-   activities, screen composables, deep links). Make a checklist of every screen, and for each the files that
-   implement it: the screen itself, its ViewModel or presenter, and the repositories or services it calls.
-2. Call launch_fresh to start. It always clears the app's data, so every recorded path starts from a first-time
+1. Call launch_fresh to start. It always clears the app's data, so every recorded path starts from a first-time
    user and replays on its own: when a screen needs data (an item to open, a task to edit), create it on the way
-   there after each launch_fresh.
-3. Breadth-first: on each new screen, call record_screen with a short name, one sentence on its purpose, and its
-   files from your checklist (paths relative to the repo root). Then try every distinct interactive element on it.
-   Treat repeated list rows as one unless the code shows they open different screens.
-4. Reach each screen with every state that changes where you can go: fill forms with values that pass the app's
-   validation (read the validation code), open menus, dialogs and tabs, scroll lists to find items below the fold,
-   and answer permission prompts (allow, and where it matters also deny). Do not enumerate every order of taps.
-5. When a branch is done or the app crashes, use launch_fresh and navigate to the next unexplored screen,
-   recreating any data it needs. Use graph_status to see untried elements.
-6. Stop when every screen in your checklist is reached or you know why it cannot be (login wall, needs real
-   payment, needs a notification or deep link you cannot trigger, debug-only). Then call finish with the
-   unreached screens as 'Name: reason' and short notes.
+   there after each launch_fresh. If the app opens on onboarding or a welcome flow, record those screens once,
+   then get past them with Skip (or the shortest way) every time: onboarding content can differ between launches,
+   so paths should not depend on its pages.
+2. Go for the checklist, shortest route first: from the screen you are on, pick the unreached checklist screen
+   whose "near labels" you can see or reach in the fewest taps. On each new screen, call record_screen with its
+   checklist name, one sentence on its purpose, and its files (the checklist's file, plus its ViewModel and the
+   repositories it calls if you know them). Treat repeated list rows as one unless the code shows they differ.
+3. Do not wander: skip cosmetic options (themes, font sizes, toggles) unless they open a checklist screen, and do
+   not enumerate every order of taps. Fill forms with values that pass the app's validation, open menus, dialogs
+   and tabs, scroll to find items below the fold, and answer permission prompts.
+4. When a branch is done or the app crashes, use launch_fresh and head for the next unreached checklist screen.
+   graph_status shows what is recorded and the untried elements.
+5. Stop when every checklist screen is reached or you know why it cannot be (login wall, needs real payment, needs
+   a notification or deep link you cannot trigger, debug-only, library). Fragments and dialogs inside a recorded
+   screen count as reached. Then call finish with the unreached screens as 'Name: reason' and short notes.
 
 Only record the app's own screens: system permission prompts and other apps are not screens (answer prompts with
 allow_permission / deny_permission). An app dialog that blocks the screen (e.g. a popup with OK) is worth recording.
@@ -51,7 +59,7 @@ Rules: this may be a real app talking to its real backend. Never create an accou
 submit content, post, send a message, pay, buy, donate or delete anything: those act on the real world. Explore the
 screens leading up to such an action and record them, but stop before the final button. droid-monkey refuses those
 taps anyway; if a tap comes back NOT TAPPED, move on. Never type real personal data; use obvious test values. Do not leave the app on purpose. A crash is a finding,
-not a failure: it is recorded automatically, so relaunch and continue. Keep going until the checklist is covered."""
+not a failure: it is recorded automatically, so relaunch and continue. Keep going until the checklist is covered or a LIMIT says stop."""
 
 
 @dataclass
@@ -86,6 +94,11 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
     if flows:
         flows_text = "\nFlows found by the earlier code analysis:\n" + "\n".join(
             f"- {f.get('name')}: {f.get('description', '')}" for f in flows)
+    from . import config as config_mod, inventory
+    cfg = config_mod.load(app_dir)
+    screens = inventory.build(app_dir, cfg.package, cfg.module, cfg.variant)
+    inventory.save(screens, out.parent / "screens.json")
+    checklist = inventory.brief(screens)
     limits = (f"\nLimits for this run: {minutes:g} minutes and at most {max_screens} screens. Reach the most important "
               f"screens first (the main flows above), and call finish when a tool result says LIMIT.\n")
     started = time.time()
@@ -101,7 +114,7 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
         try:
             result = agents.run(
                 agent,
-                PROMPT.format(profile=_profile_brief(profile), flows=flows_text + limits),
+                PROMPT.format(profile=_profile_brief(profile), flows=flows_text + limits, checklist=checklist),
                 cwd=work,
                 allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
                 servers=[device],

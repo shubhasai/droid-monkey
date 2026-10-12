@@ -223,6 +223,14 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
     theme.header("fault types that apply", "(>.<)")
     for attack, why in prof.applicable_attacks.items():
         click.echo(f"  {style(f'{attack:18}', bold=True)} {why}")
+    from . import inventory
+    screens = inventory.build(cfg.app_dir, cfg.package, cfg.module, cfg.variant)
+    inventory.save(screens, paths.inventory_path(cfg.app_dir))
+    kinds = {k: sum(1 for e in screens if e.kind == k) for k in ("activity", "screen", "route", "fragment", "dialog")}
+    theme.header(f"{len(screens)} screens in the code: the explorer's checklist", "(o.o)")
+    click.echo("  " + ", ".join(f"{n} {k}{'s' if n != 1 else ''}" for k, n in kinds.items() if n)
+               + f"; {sum(1 for e in screens if any(o['labels'] for o in e.opened_from))} with the label that opens them")
+    theme.path_line("screens", paths.inventory_path(cfg.app_dir))
     if static_only:
         out = paths.profile_path(cfg.app_dir)
         prof.save(out)

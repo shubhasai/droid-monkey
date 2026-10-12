@@ -20,7 +20,7 @@ analyze ──► explore ──► run:  plan → attack → decide → diagnos
 | Step | What happens |
 |---|---|
 | `analyze` | Static scan (manifest, permissions, 10 risk patterns), then a coding agent reads the repo and writes `ANALYSIS.md` plus the user flows worth testing |
-| `explore` | A coding agent reads the code **and drives the app** through droid-monkey's device tools. Result: a screen map where each screen is a node with a replayable path from launch, its actions and timings, and the source files behind it |
+| `explore` | A coding agent works through a **checklist of the screens in the code** (`screens.json`: every activity, Compose screen, route, fragment and dialog, the code that opens it and the on-screen labels next to that code, built statically in under a second) **and drives the app** through droid-monkey's device tools, shortest route first. Result: a screen map where each screen is a node with a replayable path from launch, its actions and timings, and the source files behind it |
 | `attack` | Runs attacks built from fixed, verified building blocks (no arbitrary commands). Each attack judges the result in code: crash/ANR buffer, field diffs, frame stats, live Activities after a forced GC, launch times, plus a Perfetto trace |
 | `run` | The full loop. A model orders the attacks and decides diagnose / retry / give up; **code** decides every verdict |
 | diagnose | An agent on Haiku 5.5 reads the code (with `read_code`, `search_code`, Entire's code graph and SQL on the Perfetto trace) and returns the root cause with file:line evidence, a fix approach and a test plan |
