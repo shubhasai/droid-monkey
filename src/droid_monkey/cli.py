@@ -121,12 +121,16 @@ def _run_spec(ctx: Context, spec, name: str):
     """Run one attack. Explore does not replay every path up front, so this is where a path that no longer replays
     shows up: report it and go on with the next attack."""
     from .driver import NavigationError
+    runner = SpecRunner(ctx, spec)
     try:
         with theme.working(f"monkeying with the app: {name}..."):
-            return SpecRunner(ctx, spec).run()
+            return runner.run()
     except NavigationError as e:
-        click.echo(f"  {theme.badge('skipped')} could not reach screen '{spec.screen}': {str(e)[:160]}")
-        theme.note("its recorded path does not replay; re-check all paths with `droid-monkey explore --from-partial`")
+        if (runner.driver.dir / "before.png").exists():  # the screen was reached: a step of the attack itself failed
+            click.echo(f"  {theme.badge('skipped')} on '{spec.screen}', a step of the attack failed: {str(e)[:200]}")
+        else:
+            click.echo(f"  {theme.badge('skipped')} could not reach screen '{spec.screen}': {str(e)[:160]}")
+            theme.note("its recorded path does not replay; re-check all paths with `droid-monkey explore --from-partial`")
         return None
 
 
