@@ -319,6 +319,19 @@ droid-monkey sells as a CI add-on for Android teams. The plan is built in cfo.ai
 - API-agent fixes have no Entire checkpoint yet.
 - Measurements come from a debug build on an emulator: slower than release on a phone, so a pass is conservative.
 
+## Building in public
+
+Posts on X during the hackathon ([@m_shubhasai](https://x.com/m_shubhasai), #neatHack):
+
+| When (IST) | Post | |
+|---|---|---|
+| Oct 11, 20:19 | [The announcement](https://x.com/m_shubhasai/status/2109295434481160496) | An agent that attacks Android apps the way real life does, fixes what breaks, and proves each fix by replaying the same attack. |
+| Oct 12, 15:29 | [The CLI](https://x.com/m_shubhasai/status/2109584845097914621) | “No bananas were harmed in making this run.” |
+| Oct 12, 18:15 | [A bug hunt found](https://x.com/m_shubhasai/status/2109626631447019842) | “Add ₹-5 more for free delivery.” Found by droid-monkey's hunt before customers found the loophole. |
+| Oct 12, 18:50 | [The recovery path](https://x.com/m_shubhasai/status/2109635351279206501) | “Your fix is wrong.” The fix passed every test; droid-monkey revised its diagnosis and rethought the design. |
+
+Landing page: [shubhasai.github.io/droid-monkey](https://shubhasai.github.io/droid-monkey/)
+
 ## Built with
 
 Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto · neatlogs · Entire

@@ -219,6 +219,15 @@ figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
 .feat li{position:relative;padding-left:16px;margin:8px 0;font-size:.94rem;line-height:1.5}
 .feat li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--banana)}
 .feat li b{font-weight:600}
+/* building in public */
+.posts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-top:28px}
+@media (max-width:1000px){.posts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.posts{grid-template-columns:minmax(0,1fr)}}
+.post{display:flex;flex-direction:column;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;color:var(--fg);text-decoration:none}
+.post:hover{border-color:var(--banana)}
+.post-when{font:500 .78rem var(--mono);color:var(--banana-ink)}
+.post-q{color:var(--muted);font-size:.93rem;flex:1}
+.post-go{font-weight:600;color:var(--accent);font-size:.9rem}
 .hero-grid>*,.start>*,.show>*,.modes>*,.steps-grid>*,.cols>*,.partners>*{min-width:0}
 .install span{min-width:0}
 footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--muted);font-size:.9rem}
@@ -743,6 +752,20 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
     </article>
 
     <p class="stack">Also: Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto</p>
+  </div>
+</section>
+
+<section id="public">
+  <div class="wrap">
+    <div class="eyebrow">Building in public</div>
+    <h2>Built in the open, on X.</h2>
+    <p class="lead">Posts from the hackathon by <a href="https://x.com/m_shubhasai">@m_shubhasai</a>, #neatHack. Times in IST.</p>
+    <div class="posts">
+        <a class="post" href="https://x.com/m_shubhasai/status/2109295434481160496"><span class="post-when">Oct 11, 20:19</span><b>The announcement</b><span class="post-q">An agent that attacks Android apps the way real life does, fixes what breaks, and proves each fix by replaying the same attack.</span><span class="post-go">View on X →</span></a>
+        <a class="post" href="https://x.com/m_shubhasai/status/2109584845097914621"><span class="post-when">Oct 12, 15:29</span><b>The CLI</b><span class="post-q">“No bananas were harmed in making this run.”</span><span class="post-go">View on X →</span></a>
+        <a class="post" href="https://x.com/m_shubhasai/status/2109626631447019842"><span class="post-when">Oct 12, 18:15</span><b>A bug hunt found</b><span class="post-q">“Add ₹-5 more for free delivery.” Found by droid-monkey's hunt before customers found the loophole.</span><span class="post-go">View on X →</span></a>
+        <a class="post" href="https://x.com/m_shubhasai/status/2109635351279206501"><span class="post-when">Oct 12, 18:50</span><b>The recovery path</b><span class="post-q">“Your fix is wrong.” The fix passed every test; droid-monkey revised its diagnosis and rethought the design.</span><span class="post-go">View on X →</span></a>
+    </div>
   </div>
 </section>
 
