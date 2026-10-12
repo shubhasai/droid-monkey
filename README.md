@@ -72,6 +72,8 @@ uv tool install git+https://github.com/shubhasai/droid-monkey
 
 Keys live in `~/.droid-monkey/.env`. droid-monkey never exports them globally, and strips them from the coding agent's environment.
 
+Step by step, from an empty machine to the first run, with troubleshooting: **[SETUP.md](SETUP.md)**.
+
 ## Quickstart
 
 ```bash
