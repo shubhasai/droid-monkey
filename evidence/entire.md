@@ -11,7 +11,7 @@
 
 ## Checkpoints today (Oct 12, 2026)
 
-**MonkeyMart** (the sample app): 32 checkpoint refs pushed to GitHub, and 29 commits carry an `Entire-Checkpoint` trailer.
+**MonkeyMart** (the sample app): 35 checkpoint refs pushed to GitHub, and 32 commits carry an `Entire-Checkpoint` trailer (counted at 21:35 IST on Oct 12).
 
 Fixes droid-monkey made, each checked on the device before it was committed:
 
@@ -25,7 +25,7 @@ Fixes droid-monkey made, each checked on the device before it was committed:
 | `0494031` | revoked permission: camera permission checked when it's used | same | `01M4NRBPHNPTMHDQS6QXRN3415` | PR #1 |
 | `92d9d45` | process death: checkout form kept in `SavedStateHandle` | same | `01M4NRG6F31PQSZTN592TZZC3X` | PR #1 |
 
-**droid-monkey** (this repo): 9 checkpoint refs (8 pushed to GitHub), with checkpoint trailers on commits such as `a84da6f` (live device stream) and `24eeace` (issue ranking and `fix`).
+**droid-monkey** (this repo): 17 checkpoint refs pushed to GitHub, and 18 commits on `main` carry a checkpoint trailer, such as `a84da6f` (live device stream), `24eeace` (issue ranking and `fix`) and `0cdc1a2` (`hunt`).
 
 ## Check it yourself
 
