@@ -149,6 +149,27 @@ class Known:
     permissions: set[str]
 
 
+_USES_NETWORK = {"tap", "scroll", "back", "restart_to_screen", "fill"}
+
+
+def _acts_while_offline(steps: list) -> bool:
+    """Whether some action happens while the network is off (between network_off/airplane_on and the next on)."""
+    offline = False
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        fault = step.get("fault")
+        if fault in ("network_off", "airplane_on"):
+            offline = True
+        elif fault in ("network_on", "airplane_off"):
+            offline = False
+        elif fault == "relaunch" and offline:
+            return True
+        elif offline and set(step) & _USES_NETWORK:
+            return True
+    return False
+
+
 def parse(text: str, known: Known) -> Spec:
     """Parse and validate YAML. Raises SpecError with every problem found, phrased so a model can fix them."""
     try:
@@ -209,6 +230,10 @@ def parse(text: str, known: Known) -> Spec:
             errors.append(msg)
     if steps and fault_steps == 0:
         errors.append("steps: at least one fault step is required (otherwise it is not an attack)")
+    if "shows_feedback" in expect and not _acts_while_offline(steps):
+        errors.append("expect shows_feedback: after network_off/airplane_on there must be a step that makes the app use "
+                      "the network (tap, scroll, back or restart_to_screen) before the network comes back. Otherwise "
+                      "nothing is loaded while offline and showing nothing is correct behaviour, not a bug")
 
     if errors:
         raise SpecError(errors)

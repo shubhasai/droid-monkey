@@ -73,3 +73,10 @@ def test_scroll_step_and_measured_expectations():
     spec = parse(GOOD.replace("  - wait: 1\n", "  - scroll: down\n").replace("[no_crash]", "[no_crash, smooth, no_leak]"), KNOWN)
     assert {"scroll": "down"} in spec.steps and spec.expect == ["no_crash", "smooth", "no_leak"]
     assert any("scroll" in e for e in errors(GOOD.replace("  - wait: 1\n", "  - scroll: sideways\n")))
+
+
+def test_shows_feedback_needs_an_action_while_offline():
+    from droid_monkey import specs
+    assert not specs._acts_while_offline([{"tap": "text:Community"}, {"fault": "network_off"}, {"settle": 10}])
+    assert specs._acts_while_offline([{"fault": "network_off"}, {"tap": "text:Community"}, {"settle": 10}])
+    assert not specs._acts_while_offline([{"fault": "network_off"}, {"fault": "network_on"}, {"tap": "x"}])
