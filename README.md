@@ -2,17 +2,51 @@
 
 **An agent that attacks any Android app with real-world faults, finds what breaks, and fixes it, with your consent, proving every fix on a running device.**
 
-It explores your app on an emulator. Then it hits the app with what real phones do to it: the system killing the app in the background, rotation, losing the network, permissions revoked in Settings, memory pressure, a loaded CPU and cold starts. When something breaks it measures exactly how, diagnoses the root cause in your code, and proposes a fix with the evidence. If you say yes, a coding agent makes the fix. droid-monkey then replays the **identical** attack plus a new regression test, and commits only if both pass.
+**▶ [Demo video (3 min)](https://youtu.be/61sALQcY_LY)** · [Landing page](https://shubhasai.github.io/droid-monkey/) · [Submission post](https://x.com/m_shubhasai/status/2109685797603680453) · [Setup guide](SETUP.md) · [Evidence](evidence/README.md)
 
-Built solo by team **Logd** (individual) for **neatHack 2026** ("Build an agent that works, literally").
+Real phones are hostile to apps. Android kills them in the background, users rotate the screen mid-task, the network drops, permissions get revoked in Settings, memory runs low, and the CPU is busy. droid-monkey does all of this to your app on an emulator. It measures exactly what broke, finds the root cause in your code and proposes a fix with the evidence. If you say yes, a coding agent makes the fix. droid-monkey then replays the **identical** attack and runs a new regression test, and it commits the fix only if both pass.
 
-**▶ Demo video (3 min): [youtu.be/61sALQcY_LY](https://youtu.be/61sALQcY_LY)** · Submission post: [x.com/m_shubhasai](https://x.com/m_shubhasai/status/2109685797603680453) · Landing page: [shubhasai.github.io/droid-monkey](https://shubhasai.github.io/droid-monkey/)
+> **It found a real bug in Google's official Android sample.** In [`android/architecture-samples`](https://github.com/android/architecture-samples), if you start editing a task and Android kills the app in the background, your edits are gone when you come back. `AddEditTaskViewModel` keeps the title and description only in a `MutableStateFlow`. droid-monkey reproduced the bug on a device, traced it to `AddEditTaskViewModel.kt:59`, and fixed it on the first try with a `SavedStateHandle` and a regression test, using **13× fewer tokens** than plain Claude Code ([details](#architecture-samples-google-one-real-bug-three-approaches)).
 
-> **It found a real bug in Google's official Android sample.** In [`android/architecture-samples`](https://github.com/android/architecture-samples), if you start editing a task and Android kills the app in the background, your edits are gone when you come back. `AddEditTaskViewModel` keeps the title and description only in a `MutableStateFlow`. droid-monkey reproduced the bug on a device, traced it to `AddEditTaskViewModel.kt:59`, and fixed it with a `SavedStateHandle` and a regression test, on the first try.
+Built solo (team **Logd**) for **neatHack 2026**, whose theme was "Build an agent that works, literally".
+
+**Contents:** [Quickstart](#quickstart) · [How it works](#how-it-works) · [Features](#features) · [Attacks](#attacks) · [Commands](#commands) · [Results](#results) · [Tracing and checkpoints](#tracing-and-checkpoints) · [Business plan](#business-plan-cfoai) · [Safety](#safety) · [Limitations](#known-limitations)
 
 ---
 
-## What it does
+## Quickstart
+
+```bash
+uv tool install git+https://github.com/shubhasai/droid-monkey
+```
+
+```bash
+cd your-android-app
+droid-monkey init        # writes monkey.yaml: package, module, AVD, a JDK that fits your Gradle
+droid-monkey analyze     # ANALYSIS.md + flows worth testing
+droid-monkey explore     # screen map, with the source files behind each screen
+droid-monkey attack builtin --diagnose   # see what breaks, and the suggested fixes (no code changes)
+droid-monkey run         # the full loop; asks you before every fix
+droid-monkey pr <run-id> # push the run's branch and open a PR with the evidence
+```
+
+| You need | For |
+|---|---|
+| Android SDK with `adb`, the emulator, and one AVD | Running the app and the attacks |
+| **One coding agent**: [Claude Code](https://claude.com/claude-code) (`claude`), [Codex](https://github.com/openai/codex) (`codex`), or just an Anthropic API key | Analysis, exploration, fixes |
+| An Anthropic API key in `~/.droid-monkey/.env` as `DROID_MONKEY_API_KEY` | droid-monkey's own reasoning (plan, decide, diagnose, design), on Haiku 5.5 by default |
+| Optional: `gh` (logged in), [Entire](https://entire.io), `NEATLOGS_API_KEY`, `TYPESAFE_API_KEY` | `pr`, checkpoints, tracing, issue ranking |
+
+**Why setup is quick:**
+- **Nothing to change in your app.** There's no SDK to add, no test code and no instrumentation. droid-monkey drives the app from outside through `adb` and reads its source.
+- **One install command and one config command.** `droid-monkey init` finds the package and module, picks an AVD and chooses a JDK that fits your Gradle version. It checks `adb`, the emulator, the coding agent and the keys, and tells you exactly what's missing. The result is a short `monkey.yaml` you can read.
+- **The same tool for any app.** The three apps in [Results](#results) needed no special code: a demo shop, Google's architecture sample and the Wikipedia app.
+
+Keys live in `~/.droid-monkey/.env`. droid-monkey never exports them globally, and it strips them from the coding agent's environment. For a step-by-step setup from an empty machine, with troubleshooting, see **[SETUP.md](SETUP.md)**.
+
+Everything droid-monkey writes goes to `.droid-monkey/` in your repo: the analysis, the screen map, attack specs, and one folder per run with screen recordings, screenshots, UI dumps, logcat, traces and verdicts. Every `run` and `attack` ends with a **visual report** (`dashboard.html`), and `droid-monkey dashboard` serves a live page over all of it.
+
+## How it works
 
 ```
 analyze ──► explore ──► run:  plan → attack → decide → diagnose → ask you → fix → verify → commit ──► report / pr
@@ -26,24 +60,19 @@ analyze ──► explore ──► run:  plan → attack → decide → diagnos
 
 | Step | What happens |
 |---|---|
-| **`analyze`** | Static scan (manifest, permissions, 10 risk patterns), then a coding agent reads the repo and writes `ANALYSIS.md` plus the user flows worth testing |
-| **`explore`** | A coding agent works through a **checklist of the screens in the code** (`screens.json`: every activity, Compose screen, route, fragment and dialog, the code that opens it and the on-screen labels next to that code, built statically in under a second) **and drives the app** through droid-monkey's device tools, shortest route first. Result: a screen map where each screen is a node with a replayable path from launch, its actions and timings, and the source files behind it |
-| **`attack`** | Runs attacks built from fixed, verified building blocks (no arbitrary commands). Each attack judges the result in code: crash/ANR buffer, field diffs, frame stats, live Activities after a forced GC, launch times, plus a Perfetto trace |
-| **`run`** | The full loop. A model orders the attacks and decides diagnose / retry / give up; **code** decides every verdict |
-| **diagnose** | An agent on Haiku 5.5 reads the code (with `read_code`, `search_code`, Entire's code graph and SQL on the Perfetto trace) and returns the root cause with file:line evidence, a fix approach and a test plan |
-| **ask you** | droid-monkey **never changes code without consent**. Every fix attempt, retries included, shows the issue, the measured evidence, the root cause and the suggested fix, and waits for **yes / no / all** |
-| **fix** | A coding agent (Claude Code, Codex or the API agent) edits only `app/src`. It has no shell, can't read docs or git history, and can't change build files. It has one extra tool: `compile` |
-| **verify** | Rebuild, replay the identical attack, run the new test. Fixed only if both pass; otherwise retry with a revised diagnosis (max 2) or roll back |
-| **commit** | One commit per fix on `droid-monkey/<run>`, with an Entire checkpoint. At the end you're put back on your own branch |
-| **`attacks new` · `suggest` · `from-flows`** | The **attack designer agent** writes attacks for this app: from a sentence in plain words, from its own read of the code, or one per risk the analysis found on a user flow. It composes only verified building blocks; every spec is validated in code and tried on the emulator before it's saved |
-| **`hunt`** | Bugs in **normal use**, no fault injected: walks every journey like a user and checks the app's logs, every screen and, with a model, each journey's numbers |
-| **`ux`** | The **UX audit**: a predicted attention heatmap for every screen, waits measured against Nielsen's limits, tap targets and labels, and a model's review of every screenshot, written as a change to make. Asks about each finding; a yes makes the change ([on Wikipedia](#wikipedia-a-large-real-app-and-the-ux-audit)) |
-| **`issues`** · **`fix`** | Every open issue from attacks, hunt and UX in one list, ranked by user impact; `fix` repairs one with your consent and commits it only if it's gone on the device |
-| **`dashboard`** | A live local page over every run, screen, heatmap and issue; stream the emulator and run any command from it |
+| **`analyze`** | A static scan (manifest, permissions, 10 risk patterns). Then a coding agent reads the repo and writes `ANALYSIS.md` and the user flows worth testing |
+| **`explore`** | A coding agent works through a **checklist of the screens in the code** and **drives the app** through droid-monkey's device tools, shortest route first. The checklist is `screens.json`, built statically in under a second: every activity, Compose screen, route, fragment and dialog, the code that opens it, and the on-screen labels next to that code. The result is a screen map. Each screen is a node with a replayable path from launch, its actions and timings, and the source files behind it |
+| **attack** | Runs attacks built from fixed, verified building blocks (no arbitrary commands). Each attack judges its result in code from the crash/ANR buffer, field diffs, frame stats, live Activities after a forced GC, launch times and a Perfetto trace |
+| **decide** | A model orders the attacks and chooses diagnose, retry or give up. **Code** decides every verdict |
+| **diagnose** | An agent on Haiku 5.5 reads the code with `read_code`, `search_code`, Entire's code graph and SQL on the Perfetto trace. It returns the root cause with file:line evidence, a fix approach and a test plan |
+| **ask you** | droid-monkey **never changes code without consent**. Every fix attempt, retries included, shows the issue, the measured evidence, the root cause and the suggested fix, then waits for **yes / no / all** |
+| **fix** | A coding agent (Claude Code, Codex or the API agent) edits only `app/src` on a `droid-monkey/<run>` branch, never yours. It has no shell, can't read docs or git history, and can't change build files. It has one extra tool: `compile` |
+| **verify** | Rebuild, replay the identical attack and run the new test. The fix counts only if both pass. Otherwise droid-monkey retries with a revised diagnosis (up to 2 tries) or rolls back |
+| **commit** | One commit per fix, carrying the root cause, the fix, the evidence and an Entire checkpoint. At the end you're put back on your own branch, and `pr` opens a pull request with the before/after evidence table (for example [MonkeyMart PR #2](https://github.com/shubhasai/MonkeyMart/pull/2)) |
 
-## Architecture
+### Architecture
 
-droid-monkey runs on your machine and works with three things it doesn't own: **your app's repo**, a **coding agent** (Claude Code, Codex or its own API agent) and an **Android emulator**. The coding agent never drives the device directly: it gets droid-monkey's two MCP servers, `device` (drive the app) and `build` (compile), and Claude Code and the API agent get no shell (Codex has one only inside its sandbox). Every fault, screen read and verdict goes through droid-monkey's own code over `adb`.
+droid-monkey runs on your machine and works with three things it doesn't own: **your app's repo**, a **coding agent** (Claude Code, Codex or its own API agent) and an **Android emulator**. The coding agent never drives the device directly. It gets droid-monkey's two MCP servers: `device` (drive the app) and `build` (compile). Claude Code and the API agent get no shell, and Codex has one only inside its sandbox. Every fault, screen read and verdict goes through droid-monkey's own code over `adb`.
 
 ```
                                             You
@@ -71,12 +100,12 @@ droid-monkey runs on your machine and works with three things it doesn't own: **
 └──────────────────────────┘      └──────────────────────────┘      └────────────────────────┘
 ```
 
-1. **Tasks for the coding agent**: read the repo (`analyze`), map every screen (`explore`), or make one fix with a brief that names the root cause, the files and the test to write.
+1. **Tasks for the coding agent**: read the repo (`analyze`), map every screen (`explore`), or make one fix from a brief that names the root cause, the files and the test to write.
 2. **MCP tool calls back to droid-monkey**: `device` to drive the app while exploring, `build` to compile while fixing. The agent is never given `adb`.
-3. **Edits**: only under `app/src`; anything else the agent changes is discarded.
-4. **droid-monkey on the repo**: the models read and search the code (with Entire's code graph); the verifier builds with Gradle; a fix is committed on `droid-monkey/<run>` only if it's proven.
+3. **Edits**: only under `app/src`. Anything else the agent changes is discarded.
+4. **droid-monkey on the repo**: the models read and search the code (with Entire's code graph), the verifier builds with Gradle, and a fix is committed on `droid-monkey/<run>` only if it's proven.
 5. **The build**: Gradle's APK is installed on the emulator, and droid-monkey records which source it was built from.
-6. **Driving the device over `adb`**: replaying paths, taps and form fills, screen reads through uiautomator, and the faults (kill in background, rotate, network off, revoke a permission, trim memory, CPU load, cold starts).
+6. **Driving the device over `adb`**: replaying paths, taps and form fills, reading screens through uiautomator, and injecting the faults (kill in background, rotate, network off, revoke a permission, trim memory, CPU load, cold starts).
 7. **Evidence back**: crash and ANR buffers, logcat, field values, frame stats, live Activities after a forced GC, heap dumps and a Perfetto trace. Code turns these into the verdict.
 
 ### One attack, start to fix
@@ -124,134 +153,98 @@ sequenceDiagram
     end
 ```
 
-- **Claude Code** runs as `claude -p` with allow and deny rules and no shell. **Codex** runs as `codex exec` in its sandbox. The **API agent** is droid-monkey's own tool loop for people with neither CLI. All three get the same brief and the same two MCP servers, and droid-monkey discards any edit outside `app/src` afterwards.
-- **The emulator** is found, booted, health-checked and restarted by droid-monkey (a watchdog restarts a hung device). Screens are read through uiautomator (uiautomator2's on-device helper when installed, about 30 ms a read).
-- **Models decide, code judges.** Models plan, explore, diagnose, design attacks and review UX; every verdict (crashed, leaked, froze, fixed) is measured on the device by code.
+- **Models decide, code judges.** Models plan, explore, diagnose, design attacks and review UX. Every verdict (crashed, leaked, froze, fixed) is measured on the device by code.
+- **Any of three coding agents.** **Claude Code** runs as `claude -p` with allow and deny rules and no shell. **Codex** runs as `codex exec` in its sandbox. The **API agent** is droid-monkey's own tool loop, for people with neither CLI. All three get the same brief and the same two MCP servers, and droid-monkey discards any edit outside `app/src` afterwards.
+- **A self-managed emulator.** droid-monkey finds, boots, health-checks and restarts the emulator, and a watchdog restarts a hung device. Screens are read through uiautomator, which takes about 30 ms a read with uiautomator2's on-device helper installed.
 
 ## Features
 
 **Understand the app**
-- **Works on any Android app.** `init` detects the module, applicationId, build variant, AVD and a JDK your Gradle can run on; nothing app-specific lives in droid-monkey's code.
-- **Code analysis** (`analyze`): manifest, permissions, dependencies and 10 risk patterns with file:line, then a coding agent's read of the repo → `ANALYSIS.md` and the user flows worth testing.
-- **Screen map** (`explore`): a coding agent drives the app on the emulator from a checklist of every screen in the code. Each screen gets a replayable path from launch and the source files behind it. Modes: `agent`, `fast` (no model), `manual` (you drive, it records) and `rules`; time, screen and spend limits.
-- **Signed-in apps**: a test account signs in after every launch (`entry_steps`, credentials from `~/.droid-monkey/.env`).
+- **Works on any Android app.** `init` detects the module, applicationId, build variant, AVD and a JDK your Gradle can run on. Nothing app-specific lives in droid-monkey's code.
+- **Code analysis** (`analyze`): the manifest, permissions, dependencies and 10 risk patterns with file:line, then a coding agent's read of the repo → `ANALYSIS.md` and the user flows worth testing.
+- **Screen map** (`explore`): a replayable path from launch to every screen in the code, with the source files behind it. The modes are `agent`, `fast` (no model), `manual` (you drive and it records) and `rules`, with limits on time, screens and spend.
+- **Signed-in apps**: a test account signs in after every launch ([see below](#signed-in-screens-test-accounts)).
 
 **Find what breaks**
-- **7 built-in real-world attacks**: process death, rotation, network loss, permission revoke, low memory, CPU load and slow startup, each on the app's best screens (`--screens`).
-- **App-specific attacks**: from the analysed user flows (`attacks from-flows`), designed by an agent for this app (`attacks suggest`), or described in plain words (`attacks new "…"`). Every spec is built from verified building blocks and tried on the emulator before it's saved.
-- **Bugs in normal use** (`hunt`), with no fault injected: crashes and swallowed exceptions in the app's logs, `null`/`NaN`/unfilled placeholders and negative money on screen, and logic bugs across a journey found by a model that must quote the screen it cites.
-- **UX audit** (`ux`): touch targets, unlabelled icons, taps to reach each screen, predicted attention heatmaps, measured waits against response-time limits, and a model's review of every screenshot.
-- **One ranked list** (`issues`): every open issue from attacks, hunt and the UX audit, ranked by user impact.
-- **Verdicts measured in code, not guessed**: crash and ANR buffers, field diffs, frame stats, live Activities after a forced GC, cold and hot start times.
-- **Deep evidence**: Perfetto traces analysed with trace_processor (what the main thread was doing in each long block), the main thread's stack from Android's own ANR record, leak reference chains from Shark (LeakCanary's analyser), screen recordings, screenshots, UI dumps and logcat for every attack.
+- **7 built-in real-world attacks**: process death, rotation, network loss, permission revoke, low memory, CPU load and slow startup, each run on the app's best screens ([Attacks](#attacks)).
+- **App-specific attacks**, designed by an agent for this app (`attacks suggest`), built from the analysed user flows (`attacks from-flows`) or described in plain words (`attacks new "…"`). Every spec is built from verified building blocks and tried on the emulator before it's saved.
+- **Bugs in normal use** (`hunt`), with no fault injected: crashes and swallowed exceptions in the app's logs, `null`/`NaN`/unfilled placeholders and negative money on screen, and logic bugs across a journey. Those are found by a model that must quote the screen it cites.
+- **UX audit** (`ux`): touch targets, unlabelled icons, taps to reach each screen, predicted attention heatmaps, waits measured against response-time limits, and a model's review of every screenshot ([on Wikipedia](#wikipedia-a-large-real-app-and-the-ux-audit)).
+- **One ranked list** (`issues`): every open issue from attacks, hunt and the UX audit, ranked by expected impact on users.
+- **Verdicts measured in code, not guessed**: crash and ANR buffers, field diffs, frame stats, live Activities after a forced GC, and cold and hot start times.
+- **Deep evidence** for every attack: Perfetto traces analysed with trace_processor (what the main thread was doing in each long block), the main thread's stack from Android's own ANR record, and leak reference chains from Shark (LeakCanary's analyser). Each attack also gets a screen recording, screenshots, UI dumps and logcat.
 
 **Fix it, and prove it**
 - **Root-cause diagnosis** with file:line evidence, using `read_code`, `search_code`, Entire's code graph and SQL over the Perfetto trace.
-- **Never changes code without your yes**: every fix shows the issue, the measured evidence, the root cause and the suggested change, and waits.
-- **Three coding agents**: Claude Code, Codex, or droid-monkey's own agent on the Anthropic API. The fixer edits only the app's sources, has no shell, and gets a `compile` tool.
-- **Proof on the device**: rebuild, replay the identical attack, run the new regression test. Committed only if both pass.
-- **Recovery**: a failed fix goes back into a revised diagnosis and the same coder session (up to 2 tries), or is rolled back without touching your other edits. An emulator watchdog restarts a hung device, and `run --resume` continues a killed run.
+- **Never changes code without your yes**: every fix shows the issue, the measured evidence, the root cause and the suggested change, and then waits.
+- **Three coding agents**: Claude Code, Codex, or droid-monkey's own agent on the Anthropic API. The fixer edits only the app's sources, has no shell and gets a `compile` tool.
+- **Proof on the device**: rebuild, replay the identical attack and run the new regression test. The fix is committed only if both pass.
+- **Recovery**: a failed fix goes back into a revised diagnosis in the same coder session (up to 2 tries), or is rolled back without touching your other edits. `run --resume` continues a killed run.
 - **Fix hunt and UX issues** (`fix`): the issue is re-checked on the device and committed only if it's gone.
-- **One commit per fix** on a `droid-monkey/<run>` branch, each with an Entire checkpoint; `pr` opens a GitHub PR with the evidence table.
+- **One commit per fix** on a `droid-monkey/<run>` branch, each with an Entire checkpoint. `pr` opens a GitHub PR with the evidence table.
 
 **See and share the results**
-- **Live dashboard** (`dashboard`): every run, screen, issue, analysis and file in `.droid-monkey/`, refreshing as runs write; stream the emulator's screen and run any command from the page.
-- **Reports**: an HTML report per run with recordings and charts, a PR body, a score card, a receipt with time, tokens and cost per step, and before/after comparisons (`report`, `compare`).
+- **Live dashboard** (`dashboard`): every run, screen, issue, analysis and file in `.droid-monkey/`, refreshed as runs write. You can stream the emulator's screen and run any command from the page.
+- **Visual reports** per run. Each attack gets the evidence that fits its failure:
+  - the screen recording of the attack, next to the same attack replayed after the fix;
+  - a before/after table of lost input;
+  - a main-thread timeline from Perfetto;
+  - frame-time, launch-time and memory charts;
+  - the crash log or ANR record;
+  - the fix's code diff.
+- **Receipts and comparisons**: time, tokens and cost per step for every run, a score card, a PR body, and before/after tables (`report`, `compare`).
 - **Tracing**: every run is one neatlogs trace, with every graph node, model call and coding session.
 - **Cost control**: `econ` turns measured costs into the cfo.ai business plan's inputs, and `run --tier` enforces the plan's fix budget.
-- **A CLI with character**: ASCII monkey art for every result, a banana meter for the resilience score.
+- **A CLI with character**: ASCII monkey art for every result, and a banana meter for the resilience score.
 
 ## Attacks
 
-Built-in attacks are generic templates, filled per app from the screen map:
+Built-in attacks are generic templates, filled in per app from the screen map:
 
 | Attack | Fault | Fails as |
 |---|---|---|
-| `process_death` | Fill a form, the app is killed in the background like the low-memory killer does, come back | `crashed`, `lost_state` |
+| `process_death` | Fill a form, kill the app in the background the way the low-memory killer does, then come back | `crashed`, `lost_state` |
 | `rotation` | Rotate while work started by a tap is still running, or on a filled form | `crashed`, `lost_state` |
 | `network_loss` | Drop wifi and data, then submit or start slow work | `crashed`, `no_feedback` (silent failure) |
-| `permission_revoke` | Grant a permission through the app, revoke it the way Settings does, use the feature again | `crashed` |
-| `low_memory` | Recreate the screen 3 times, send critical and background trim signals, come back | `leaked`: more live Activities after a forced GC than at the start, or the heap grew by half and 16 MB. On a leak, droid-monkey dumps the heap and runs **Shark** (LeakCanary's analyser, `brew install leakcanary-shark`) for the exact reference chain that holds the screen; if the app ships LeakCanary, its log adds which screens were destroyed |
-| `performance` | Busy-loop 4 CPU cores, scroll, use the screen's slowest action, press a key while it runs | `froze`: any frame over 700 ms (Play vitals "frozen"); `anr`: Android declares the app not responding (the main thread's stack is pulled from Android's own ANR record) |
+| `permission_revoke` | Grant a permission through the app, revoke it the way Settings does, then use the feature again | `crashed` |
+| `low_memory` | Recreate the screen 3 times, send critical and background trim signals, then come back | `leaked`: more live Activities after a forced GC than at the start, or the heap grew by half and by 16 MB |
+| `performance` | Busy-loop 4 CPU cores, scroll, use the screen's slowest action, and press a key while it runs | `froze`: any frame over 700 ms (the Play vitals "frozen" limit); `anr`: Android declares the app not responding |
 | `slow_startup` | 5 cold starts and 3 hot starts, timed by Android (`am start -W`) | `slow_start`: median cold start ≥ 5 s or hot start ≥ 1.5 s (Play vitals) |
 
 Each built-in attack runs on its **best 2 screens** by default (`--screens N` or `screens_per_attack:` in `monkey.yaml`).
 
-Plus **app-specific attacks**:
-- `droid-monkey attacks from-flows`: every risk the analysis found on a user flow (checkout, login, add task...) becomes an attack that walks that flow and injects that fault at the moment the analysis named. On MonkeyMart, the first two found a real crash by backgrounding or rotating the app during a 5 s load, for $0.01.
+- **Leaks**: when droid-monkey finds a leak, it dumps the heap and runs **Shark** (LeakCanary's analyser, `brew install leakcanary-shark`) to get the exact reference chain that holds the screen. If the app ships LeakCanary, its log adds which screens were destroyed.
+- **ANRs**: the main thread's stack is pulled from Android's own ANR record.
+- **Perfetto** traces the performance, memory and startup attacks. droid-monkey analyses each trace with trace_processor and shows:
+  - what the main thread was doing inside each long block (computing, waiting on a lock or sleep, or waiting on disk);
+  - blocking calls, binder calls, the busiest threads, garbage collection and memory use over time;
+  - for slow launches, a breakdown of the slowest one (`bindApplication`, `activityStart` and the app's own work).
+
+**App-specific attacks** come from the attack designer agent. It composes only verified building blocks, and every spec is validated against the building blocks and the screen map. Each one can be tried on the emulator before it's saved.
+- `droid-monkey attacks from-flows` turns every risk the analysis found on a user flow (checkout, login, add task...) into an attack. The attack walks that flow and injects the fault at the moment the analysis named. On MonkeyMart, the first two found a real crash for $0.01, by backgrounding or rotating the app during a 5 s load.
 - `droid-monkey attacks suggest`: the designer agent reads the analysis and the code and writes new attacks for this app.
-- `droid-monkey attacks new "rotate the phone while the order is being placed"`: describe one in plain words.
-
-Every spec is validated against the building blocks and the screen map, and can be tried on the emulator before it's saved.
-
-**Perfetto** traces the performance, memory and startup attacks. droid-monkey analyses the trace with trace_processor and shows:
-- what the main thread was doing inside each long block: computing, waiting on a lock or sleep, or waiting on disk;
-- blocking calls, binder calls, the busiest threads, garbage collection, and memory use over time;
-- for slow launches, a breakdown of the slowest one (`bindApplication`, `activityStart`, and the app's own work).
-
-## Install
-
-```bash
-uv tool install git+https://github.com/shubhasai/droid-monkey
-```
-
-| You need | For |
-|---|---|
-| Android SDK with `adb`, the emulator, and one AVD | Running the app and the attacks |
-| **One coding agent**: [Claude Code](https://claude.com/claude-code) (`claude`), or [Codex](https://github.com/openai/codex) (`codex`), or just an Anthropic API key | Analysis, exploration, fixes |
-| An Anthropic API key in `~/.droid-monkey/.env` as `DROID_MONKEY_API_KEY` | droid-monkey's own reasoning (plan, decide, diagnose, design), on Haiku 5.5 by default |
-| Optional: `gh` (logged in), [Entire](https://entire.io), a `NEATLOGS_API_KEY` | `pr`, checkpoints, tracing |
-
-**Why setup is quick:**
-- **Nothing to change in your app.** No SDK to add, no test code, no instrumentation. droid-monkey drives the app from the outside, through `adb`, and reads its source.
-- **One install command, one config command.** `droid-monkey init` finds the package and module, picks an AVD, and chooses a JDK that fits your Gradle version. It checks `adb`, the emulator, the coding agent and the keys, and says exactly what's missing. The result is a short `monkey.yaml` you can read.
-- **The same tool for any app.** The three apps below needed no special code: a demo shop, Google's architecture sample and the Wikipedia app.
-
-Keys live in `~/.droid-monkey/.env`. droid-monkey never exports them globally, and strips them from the coding agent's environment.
-
-Step by step, from an empty machine to the first run, with troubleshooting: **[SETUP.md](SETUP.md)**.
-
-## Quickstart
-
-```bash
-cd your-android-app
-droid-monkey init        # writes monkey.yaml: package, module, AVD, a JDK that fits your Gradle
-droid-monkey analyze     # ANALYSIS.md + flows worth testing
-droid-monkey explore     # screen map, with the source files behind each screen
-droid-monkey attack builtin --diagnose   # see what breaks, and the suggested fixes (no code changes)
-droid-monkey run         # the full loop; asks you before every fix
-droid-monkey pr <run-id> # push the run's branch and open a PR with the evidence
-```
-
-Everything droid-monkey writes goes to `.droid-monkey/` in your repo: analysis, screen map, attack specs, and one folder per run with screen recordings, screenshots, UI dumps, logcat, traces and verdicts.
-
-Every `run` and `attack` ends with a **visual report** (`dashboard.html`). Each attack gets the evidence that fits its failure:
-- the **screen recording** of the attack, next to the **same attack replayed after the fix**;
-- a before/after table of **lost input**;
-- a **main-thread timeline** from Perfetto, with every long block marked;
-- **frame-time**, **launch-time** (against the Play vitals limits) and **memory** charts;
-- the crash log or Android's **ANR record**;
-- the fix's **code diff**.
+- `droid-monkey attacks new "rotate the phone while the order is being placed"` builds an attack from a description in plain words.
 
 ## Commands
 
 | Command | |
 |---|---|
-| `init` | Detect module, applicationId, AVD and JDK; write `monkey.yaml`; check prerequisites |
+| `init` | Detect the module, applicationId, AVD and JDK, write `monkey.yaml` and check prerequisites |
 | `analyze [--static-only] [--agent]` | Static profile and the coding agent's read → `ANALYSIS.md`, `flows.json` |
-| `dashboard [--port 8787]` | A live local dashboard over everything in `.droid-monkey/`, and a **Commands** page that runs every droid-monkey command from forms built from the CLI itself: output streams into the page, consent prompts ("Fix it?") get Yes/No/All buttons, Stop sends Ctrl+C, one job at a time; publishing (`pr`) needs an extra confirmation. Every command request needs the server's token from its own pages: runs with their evidence and reports, screens with attention heatmaps, the analysis, user flows, saved attacks, the UX audit and every file. It follows the folder: when a run writes something, the open page refreshes. Listens on 127.0.0.1 only |
-| `explore [--mode agent\|fast\|manual\|rules] [--agent] [--minutes N] [--max-screens N] [--check-paths] [--from-partial]` | Screen map. Agent mode stops at 10 min / 60 screens by default (`explore_minutes`, `explore_max_screens`, `explore_max_usd`, `verify_minutes` in `monkey.yaml`) and keeps what it mapped; Each path is checked when an attack replays it (`--check-paths` replays them all right away); `--from-partial` re-checks the paths of an interrupted run's map or the saved one. `manual`: you drive, droid-monkey records. `rules` is a free tap-everything explorer with no model |
-| `attack NAME\|builtin\|custom\|all [--diagnose] [--target --action]` | Run attacks, no fixing. Builds first if the installed app wasn't built from the current source |
-| `issues [--rerank]` / `fix ISSUE` | Every open issue (attacks, hunt, UX) in one list, **ranked by Jev** (TypeSafe): expected impact on users × how likely it is a real bug (severity fallback without a key). `fix` repairs one hunt/UX issue with your consent, re-checks it on the device and commits only if it is gone; attack failures go through `run --attacks NAME`. The dashboard's **Issues** page has a Fix button on each |
-| `hunt [--no-model]` | Bugs in **normal use**, no fault injected: walks every recorded path like a user and checks the app's logs after each step (crashes, exceptions the app caught and only logged, main-thread jank, leaked windows), every screen (`null`/`NaN`/unfilled placeholders, negative money, blank screens, duplicate rows) and, with a model reading the screenshots, each journey's numbers and messages. A model finding must quote text that is really on the screen it cites, or it is dropped → `HUNT.md`, `issues.json` |
-| `ux [--no-apply] [--agent api\|claude\|codex] [--review-model M]` | **UX audit** of every mapped screen: predicted attention heatmaps, waits measured against Nielsen's limits, tap targets under 48 dp, unlabelled controls, taps from launch, and a model's review of every screenshot with the code behind it. Each finding comes as a change (problem, evidence, why it matters, the edit, the files); findings seen on the device and ones suspected from code only are labelled apart. Then it asks about each finding; a yes has a coding agent make the change, which is discarded if the app doesn't build; otherwise droid-monkey reopens the screen for a before/after screenshot and commits it (`--no-apply` only writes the audit) → `UX_AUDIT.md`, `ux-audit.html`, `attention/` |
-| `attacks list\|show\|suggest\|new\|from-flows` | Built-in and app-specific attack types; the designer agent; attacks from the analysed user flows |
-| `run [--attacks a,b] [--screens N] [--agent] [--auto-fix] [--resume ID]` | The full loop. `--auto-fix` skips the question (CI); `--resume` continues a killed or paused run. Every run ends with a **receipt**: what was found and fixed, time, and tokens and cost per step |
-| `report RUN` / `compare A B` / `pr RUN` | PR body, score card and dashboard / before-after table / push and open the PR |
+| `explore [--mode agent\|fast\|manual\|rules] [--agent] [--minutes N] [--max-screens N] [--check-paths] [--from-partial]` | Build the screen map. Agent mode stops at 10 min or 60 screens by default and keeps what it mapped (`explore_minutes`, `explore_max_screens`, `explore_max_usd` and `verify_minutes` in `monkey.yaml`). Each path is checked when an attack replays it, and `--check-paths` replays them all right away. `--from-partial` re-checks the paths of an interrupted run's map or of the saved one. In `manual` you drive and droid-monkey records. `rules` is a free tap-everything explorer with no model |
+| `attack NAME\|builtin\|custom\|all [--diagnose] [--target --action]` | Run attacks without fixing anything. Builds first if the installed app wasn't built from the current source |
+| `run [--attacks a,b] [--screens N] [--agent] [--auto-fix] [--resume ID] [--tier T]` | The full loop. `--auto-fix` skips the question (for CI), `--resume` continues a killed or paused run, and `--tier` enforces the plan's fix budget. Every run ends with a **receipt**: what was found and fixed, the time taken, and tokens and cost per step |
+| `hunt [--no-model]` | Find bugs in **normal use**, with no fault injected. It walks every recorded path like a user and checks the app's logs after each step for crashes, exceptions the app caught and only logged, main-thread jank and leaked windows. On every screen it checks for `null`/`NaN`/unfilled placeholders, negative money, blank screens and duplicate rows. With a model reading the screenshots, it also checks each journey's numbers and messages. A model finding must quote text that is really on the screen it cites, or it's dropped → `HUNT.md`, `issues.json` |
+| `ux [--no-apply] [--agent api\|claude\|codex] [--review-model M]` | Run a **UX audit** of every mapped screen: predicted attention heatmaps, waits measured against Nielsen's limits, tap targets under 48 dp, unlabelled controls, taps from launch, and a model's review of every screenshot with the code behind it. Each finding is a change (problem, evidence, why it matters, the edit, the files), and findings seen on the device are labelled apart from ones suspected from code only. droid-monkey asks about each finding, and a yes has a coding agent make the change. The change is discarded if the app doesn't build. Otherwise droid-monkey reopens the screen for a before/after screenshot and commits it. `--no-apply` only writes the audit → `UX_AUDIT.md`, `ux-audit.html`, `attention/` |
+| `issues [--rerank]` / `fix ISSUE` | List every open issue (attacks, hunt, UX) ranked by expected impact on users × how likely it is to be a real bug, scored by TypeSafe's Jev model. Without `TYPESAFE_API_KEY` it falls back to severity. `fix` repairs one hunt or UX issue with your consent, re-checks it on the device and commits it only if it's gone. Attack failures go through `run --attacks NAME` |
+| `attacks list\|show\|suggest\|new\|from-flows` | Built-in and app-specific attack types, the designer agent, and attacks from the analysed user flows |
+| `report RUN` / `compare A B` / `pr RUN` | PR body, score card and dashboard / a before-after table / push and open the PR |
+| `econ --app-dir DIR` | Turn the measured costs of every run into the business plan's inputs (`business/drivers.csv`) |
+| `dashboard [--port 8787]` | A live local dashboard over everything in `.droid-monkey/`: runs with their evidence and reports, screens with attention heatmaps, the analysis, user flows, saved attacks, the UX audit and every file. The open page refreshes when a run writes something. Its **Commands** page runs every droid-monkey command from forms built from the CLI itself. Output streams into the page, consent prompts ("Fix it?") get Yes/No/All buttons, Stop sends Ctrl+C, and only one job runs at a time. Publishing (`pr`) needs an extra confirmation. The server listens on 127.0.0.1 only, and every command request needs the token from its own pages. The **Issues** page has a Fix button on each issue |
 
 ### Coding agents
 
-`--agent` or `agent:` in `monkey.yaml`: `auto` (default) picks the first one that's set up.
+Set the agent with `--agent` or `agent:` in `monkey.yaml`. The default, `auto`, picks the first one that's set up.
 
 | | Claude Code | Codex | API agent |
 |---|---|---|---|
@@ -261,11 +254,9 @@ Every `run` and `attack` ends with a **visual report** (`dashboard.html`). Each 
 | Cost in neatlogs | Exact, as Claude Code reports it | Tokens only | Priced per call |
 | Entire checkpoints | ✅ | With `entire agent add codex` | ✗ (not yet) |
 
+### Signed-in screens (test accounts)
 
-## Signed-in screens (test accounts)
-
-droid-monkey never logs in, signs up, posts or pays on an app's **live** backend: every such tap is refused. To reach
-the screens behind a login, give it a **test account** and it signs in after every launch:
+droid-monkey never logs in, signs up, posts or pays on an app's **live** backend: every such tap is refused. To reach the screens behind a login, give it a **test account** and it signs in after every launch:
 
 ```yaml
 # monkey.yaml
@@ -274,15 +265,14 @@ entry_check: "text:Watchlist"   # something only a signed-in user sees: the run 
 live_backend: false             # only when the app points at a test/staging backend
 ```
 
-The credentials come from your environment or `~/.droid-monkey/.env`, never from `monkey.yaml`. While signed in,
-droid-monkey refuses to tap Log out / Sign out (so a run keeps its session), and the explorer is told to explore the
-signed-in screens without changing the account. Keep `live_backend: true` (the default) unless the build talks to a
-test backend: then sign-up, posting and paying stay refused even while signed in.
+The credentials come from your environment or `~/.droid-monkey/.env`, never from `monkey.yaml`. While signed in, droid-monkey refuses to tap Log out or Sign out, so a run keeps its session. The explorer is told to explore the signed-in screens without changing the account. Keep `live_backend: true` (the default) unless the build talks to a test backend. With the default, sign-up, posting and paying stay refused even while signed in.
 
 ## Results
 
+droid-monkey was tested on three apps: Google's architecture sample, MonkeyMart (a demo shop with planted bugs) and the Wikipedia app. All results are single runs.
+
 ### architecture-samples (Google): one real bug, three approaches
-[android/architecture-samples](https://github.com/android/architecture-samples) is Google's reference app for Android architecture (Compose, ViewModels, Hilt). droid-monkey found a real process-death bug in it: a half-typed new task is lost when the OS kills the app in the background. It then fixed it three ways, from the same base commit. The fix of each approach was judged the same way, by droid-monkey's device replay.
+[android/architecture-samples](https://github.com/android/architecture-samples) is Google's reference app for Android architecture (Compose, ViewModels, Hilt). droid-monkey found a real process-death bug in it: a half-typed new task is lost when the OS kills the app in the background. The bug was then fixed three ways from the same base commit, and droid-monkey's device replay judged each approach's fix the same way.
 
 | | Plain Claude Code (generic prompt, no droid-monkey) | droid-monkey, no diagnosis | **droid-monkey** |
 |---|---|---|---|
@@ -291,10 +281,10 @@ test backend: then sign-up, posting and paying stay refused even while signed in
 | Cost | $2.46 | $0.43 | **$0.39** |
 | Change | 14 files, +424/−36, mostly speculative hardening never checked on a device | 2 files, +56/−4 | **2 files, +55/−5** |
 
-Without a reproduction or a stack trace, plain Claude Code read its way through the repo: about 13× the tokens. It also changed code for faults that, on the device, don't happen. droid-monkey's diagnosis pointed the coder at `AddEditTaskViewModel.kt:59`.
+Without a reproduction or a stack trace, plain Claude Code read its way through the repo and used about 13× the tokens. It also changed code for faults that don't happen on the device. droid-monkey's diagnosis pointed the coder straight at `AddEditTaskViewModel.kt:59`.
 
 ### MonkeyMart: 4 planted bugs
-Same 4 attacks, same base. Each version fixed a weakness found in the previous version's run data.
+[MonkeyMart](https://github.com/shubhasai/MonkeyMart) was run with the same 4 attacks from the same base. Each version of droid-monkey fixed a weakness found in the previous version's run data.
 
 | Version | Fixed | Coder tokens | Cost | Time |
 |---|---|---|---|---|
@@ -315,16 +305,16 @@ To be clear about what this shows: on a small app with textbook bugs, plain Clau
 - finding which faults actually break the app;
 - reproducing them on a running device;
 - proving each fix by replaying the identical attack;
-- the evidence trail.
+- leaving an evidence trail.
 
-Its advantage grows on bigger codebases and on bugs with no stack trace. All results are single runs.
+That advantage grows on bigger codebases and on bugs with no stack trace.
 
 ### Wikipedia: a large real app, and the UX audit
-The [Wikipedia Android app](https://github.com/wikimedia/apps-android-wikipedia) is a large production codebase. droid-monkey mapped **40 screens** from its code and the device, without any changes to the app. It then ran `droid-monkey ux` on it ($1.17, Sonnet 5.5). The audit combines three kinds of evidence:
+The [Wikipedia Android app](https://github.com/wikimedia/apps-android-wikipedia) is a large production codebase. droid-monkey mapped **40 screens** from its code and the device, with no changes to the app. Then it ran `droid-monkey ux` on it ($1.17, Sonnet 5.5). The audit combines three kinds of evidence:
 
-- **Predicted attention heatmaps** for every screen. A saliency model (spectral residual) is combined with a prior from the UI structure, and each screen gets a heatmap plus the share of attention each control is likely to get. Five screens were flagged where the main action loses to something else. On the first onboarding screen, "Learn more about Wikipedia" is predicted to draw **16× the attention of the Forward button (18% vs 1%)**. On the interests screen, **Next ranks 7th of 8 controls**.
-- **Measured waits** on every route, against Nielsen's limits (0.1 s instant, 1 s keeps the flow, 10 s loses attention). Cold start was 1.59 s; 8 steps broke the flow, for example opening a file page took 2.3 s.
-- **What was observed versus suspected.** There are **9 findings: 7 seen on the device, 2 suspected from the code only**, and the two are labelled differently. The top one, rated high, is real: a Year in Review promo covers an article the user has just opened.
+- **Predicted attention heatmaps** for every screen. A saliency model (spectral residual) is combined with a prior from the UI structure. Each screen gets a heatmap and the share of attention each control is likely to get. Five screens were flagged where the main action loses to something else. On the first onboarding screen, "Learn more about Wikipedia" is predicted to draw **16× the attention of the Forward button (18% vs 1%)**. On the interests screen, **Next ranks 7th of 8 controls**.
+- **Measured waits** on every route, against Nielsen's limits (0.1 s feels instant, 1 s keeps the flow, 10 s loses attention). Cold start was 1.59 s, and 8 steps broke the flow. For example, opening a file page took 2.3 s.
+- **What was observed versus suspected.** There are **9 findings: 7 seen on the device and 2 suspected from the code only**, and the two kinds are labelled differently. The top finding, rated high, is real: a Year in Review promo covers an article the user has just opened.
 
 | First onboarding screen: the eye goes to the headline and "Learn more", not Forward | Interests: Next ranks 7th of 8 |
 |---|---|
@@ -345,15 +335,8 @@ The [Wikipedia Android app](https://github.com/wikimedia/apps-android-wikipedia)
 | <img src="site/assets/heatmaps/feedconfigurationscreen.jpg" width="160" alt="Feed configuration"><br><sub>Feed configuration</sub> | <img src="site/assets/heatmaps/homefeeddefaultviewscreen.jpg" width="160" alt="Default feed view"><br><sub>Default feed view</sub> | <img src="site/assets/heatmaps/aboutwikipediascreen.jpg" width="160" alt="About Wikipedia"><br><sub>About Wikipedia</sub> | <img src="site/assets/heatmaps/placesfilteractivity.jpg" width="160" alt="Places filter"><br><sub>Places filter</sub> | <img src="site/assets/heatmaps/didyouknowscreen.jpg" width="160" alt="Did you know"><br><sub>Did you know</sub> |
 </details>
 
-#### How the UX audit helps
-- **It finds problems that never crash.** A user who can't find the way forward, waits 2 s after a tap, or hears "View" from TalkBack just leaves. No crash report, no stack trace, nothing in the logs.
-- **It shows what users will miss before they miss it.** The heatmap predicts where the eye goes and gives each control a share of attention, so a main button that loses to a link or an image shows up as a number.
-- **It measures instead of guessing.** Waits are timed on the device, tap targets measured in dp, labels read from the UI dump, taps counted from launch.
-- **It gives a change, not a complaint.** Each finding says what to edit and in which file, and joins the same ranked `issues` list as crashes and leaks, so UX work is prioritised against everything else.
-- **It keeps evidence honest.** What was seen on the device and what was only suspected in the code are labelled apart.
-
 #### What the agent suggests changing in Wikipedia
-The 7 findings seen on the device, each with the change the review proposed. These are proposals: no changes were made to Wikipedia.
+These are the 7 findings seen on the device, each with the change the review proposed. They are proposals only: no changes were made to Wikipedia.
 
 | Severity | Seen on the device | Suggested change | Files |
 |---|---|---|---|
@@ -365,12 +348,19 @@ The 7 findings seen on the device, each with the change the review proposed. The
 | low | The talk reply box opens with raw `@[[User:SL93\|SL93]]`, 4.4× the attention of Next | Show the mention as a chip or "@SL93"; convert to wikitext only when sending | `TalkReplyActivity.kt` |
 | low | Opening the Picture of the day takes 2.3 s with nothing showing it's loading | Show the title and the feed's thumbnail at once, with progress for the details | `FilePageFragment.kt` |
 
-Plus 2 suspected from the code only, on screens nobody reached (for example an inverted check in `EditSectionActivity.kt` that can overwrite an unsaved edit after the Activity is recreated). They don't count as findings until an attack reproduces them.
+There are also 2 findings suspected from the code only, on screens nobody reached. One example is an inverted check in `EditSectionActivity.kt` that can overwrite an unsaved edit after the Activity is recreated. They don't count as findings until an attack reproduces them.
 
-The heatmaps are predictions, not eye tracking, and each finding says whether it is observed or suspected. The attacks also found a real leak in Wikipedia: `YearInReviewOnboardingActivity` instances stay alive after a forced GC (1 → 3).
+The heatmaps are predictions, not eye tracking, and each finding says whether it was observed or suspected. The attacks also found a real leak in Wikipedia: `YearInReviewOnboardingActivity` instances stay alive after a forced GC (1 → 3).
+
+#### Why a UX audit
+- **It finds problems that never crash.** A user who can't find the way forward, waits 2 s after a tap, or hears "View" from TalkBack just leaves. There's no crash report, no stack trace and nothing in the logs.
+- **It shows what users will miss before they miss it.** The heatmap predicts where the eye goes and gives each control a share of attention, so a main button that loses to a link or an image shows up as a number.
+- **It measures instead of guessing.** Waits are timed on the device, tap targets measured in dp, labels read from the UI dump and taps counted from launch.
+- **It gives a change, not a complaint.** Each finding says what to edit and in which file. It joins the same ranked `issues` list as crashes and leaks, so UX work is prioritised against everything else.
+- **It keeps evidence honest.** What was seen on the device and what was only suspected in the code are labelled apart.
 
 ### Performance, memory and startup
-These were checked on bugs planted on a scratch branch, plus both apps as they are:
+These attacks were checked on bugs planted on a scratch branch, and on both apps as they are:
 
 | Planted bug | Measured | Diagnosis |
 |---|---|---|
@@ -378,44 +368,33 @@ These were checked on bugs planted on a scratch branch, plus both apps as they a
 | Activity added to a static list | `leaked`: 1 → 7 live Activities after a forced GC | Found the static list and ruled out two other suspects |
 | 5.5 s busy loop in `onCreate` | `slow_start`: cold start median 5946 ms | `performCreate` running for 5525 ms; pointed to the loop |
 
-No false alarms on either app as it is.
-
-## How a fix is made
-
-1. **Diagnose.** The diagnoser reads the failure's evidence: the crash, logcat, the Perfetto main-thread timeline, leak counts and screenshots. It also reads the app's code, through code search and **Entire's code graph** (`entire graph search` finds the symbols, callers and covering tests). It returns the root cause with `file:line`, the files to change and a regression-test plan.
-2. **Ask.** droid-monkey shows you the diagnosis and the evidence and asks **"Fix it?"**, in the terminal or with a button on the dashboard. Nothing changes without a yes, unless you pass `--auto-fix`.
-3. **Fix.** The coding agent, Claude Code by default, works on a `droid-monkey/run-…` or `droid-monkey/fix-…` branch, never yours. It has only read and edit tools, plus a compile tool. Only its edits under `app/src` are kept.
-4. **Verify.** droid-monkey rebuilds the app, **replays the identical attack** and runs the regression test. The fix is committed only if both pass. If not, the failure goes back into a revised diagnosis (at most 2 attempts), and if it still fails the sources are restored.
-5. **Commit and PR.** The commit message carries the root cause, the fix and the evidence. **Entire records the Claude Code session that wrote it, and the commit gets an `Entire-Checkpoint` trailer.** `droid-monkey pr` opens a pull request with the before/after evidence table, for example [MonkeyMart PR #2](https://github.com/shubhasai/MonkeyMart/pull/2).
-
-**What Entire adds:** open the commit on entire.io to see the session behind the fix: the brief droid-monkey gave the agent, the diagnosis, every step, the tokens and the diff. That answers "why did this line change, and who changed it" for code written by an agent. The checkpoints are pushed with the repo: 32 on MonkeyMart, and the sessions that built droid-monkey itself. Details: [evidence/entire.md](evidence/entire.md).
+There were no false alarms on either app as it is.
 
 ## Tracing and checkpoints
 
-How each partner tool is used, with the evidence: [evidence/](evidence/README.md) ([neatlogs](evidence/neatlogs.md) · [Entire](evidence/entire.md) · [cfo.ai](evidence/cfo-ai.md)).
+Each partner tool and the evidence for it: [evidence/](evidence/README.md) ([neatlogs](evidence/neatlogs.md) · [Entire](evidence/entire.md) · [cfo.ai](evidence/cfo-ai.md)).
 
-- **neatlogs:** every run is one trace. It covers every graph node and every model and tool call, and each `claude -p` session is an LLM span with its exact tokens and cost. The app is the "end user" and the run id is the session.
-- **Before and after, in neatlogs:** the MonkeyMart v1 and v4 runs side by side (in v4 every fix lands first try, with 13% fewer coder tokens), and the trace of the recovery run: [evidence/neatlogs.md](evidence/neatlogs.md#before-and-after-an-improvement-in-neatlogs).
-- **Entire:** the Claude Code session that built droid-monkey itself is attached to this repo as a checkpoint, and every fix commit droid-monkey makes in an app carries an `Entire-Checkpoint` trailer linking it to the recorded Claude Code session that wrote it. The diagnoser also uses Entire's code graph to find the symbols involved.
+### Entire: why did this line change?
+Every fix commit droid-monkey makes carries an `Entire-Checkpoint` trailer that links it to the recorded Claude Code session that wrote it. Open the commit on entire.io to see the brief droid-monkey gave the agent, the diagnosis, every step, the tokens and the diff. For code written by an agent, that answers "why did this line change, and who changed it". The checkpoints are pushed with the repo. MonkeyMart has 32, and the sessions that built droid-monkey itself are attached to this repo. The diagnoser also uses Entire's code graph (`entire graph search`) to find the symbols involved, their callers and the tests that cover them. Details: [evidence/entire.md](evidence/entire.md).
 
-### How neatlogs helped
+### neatlogs: one trace per run
+droid-monkey is an agent that drives other agents. It runs Claude Code sessions for analysis, exploration, diagnosis and fixes, and makes its own Claude calls for planning and decisions. Most of that work happens in separate `claude -p` processes, so droid-monkey's own logs only see what each session reports back. neatlogs puts all of it in one trace per run:
 
-droid-monkey is an agent that drives other agents: Claude Code sessions for analysis, exploration, diagnosis and fixes, plus its own Claude calls for planning and decisions. Most of that work happens in separate `claude -p` processes, so droid-monkey's own logs only see what each session reports back. neatlogs puts all of it in one trace per run:
-
-- **One timeline per run.** The LangGraph nodes (plan, attack, decide, diagnose, fix, verify, commit), every API call (LangChain and Anthropic instrumentation), and every Claude Code session as an LLM span.
+- **One timeline per run.** It covers the LangGraph nodes (plan, attack, decide, diagnose, fix, verify, commit), every API call (LangChain and Anthropic instrumentation), and every Claude Code session as an LLM span.
 - **Real cost.** Claude Code sessions carry the tokens and cost Claude Code reports. API calls are priced per call, so a run's spend is visible per step, not just as a total.
-- **Per app and per run.** The app's package is the end user and the run id is the session, so the traces for one app, or one run, are easy to find.
+- **Per app and per run.** The app's package is the end user and the run id is the session, so the traces for one app or one run are easy to find.
+- **Before and after.** The MonkeyMart v1 and v4 runs are side by side (in v4 every fix lands on the first try, with 13% fewer coder tokens), along with the trace of the recovery run: [evidence/neatlogs.md](evidence/neatlogs.md#before-and-after-an-improvement-in-neatlogs).
 
-**It caught a failure we could not see.** On 12 Oct, neatlogs raised the incident *Explorer returns empty response without mapping screens* (`981cb137`, medium). It came from one trace: the `explore` session made no tool calls, returned an empty answer and reported zero output tokens. droid-monkey's own logs showed no error for it. The only traceback in that day's job logs was an unrelated device error. The session had "succeeded" as far as droid-monkey could tell.
+**It caught a failure we couldn't see.** On 12 Oct, neatlogs raised the incident *Explorer returns empty response without mapping screens* (`981cb137`, medium). It came from one trace: the `explore` session made no tool calls, returned an empty answer and reported zero output tokens. droid-monkey's own logs showed no error for it, and the only traceback in that day's job logs was an unrelated device error. As far as droid-monkey could tell, the session had succeeded.
 
 **The trace pointed at the cause.** An empty LLM span with no tool calls meant the agent had stopped without touching the device. Following that into the code showed two gaps. First, an empty or errored `claude -p` result was treated as a success, and `explore` never checked it. Second, if an older `screen-map.json` was on disk, `explore` returned that map as if this run had made it. So a run that mapped nothing could look like a finished exploration.
 
 **The fix, and how it shows in neatlogs now:**
-- A `claude -p` result that is an error, or has no text and no output tokens, is a failure with a reason. This applies to every Claude Code session droid-monkey runs: analysis, exploration, diagnosis and fixes.
+- A `claude -p` result that is an error, or has no text and no output tokens, is now a failure with a reason. This applies to every Claude Code session droid-monkey runs: analysis, exploration, diagnosis and fixes.
 - The reason is set on the span as `claude_code.error`, with ERROR status. A failure like this one now shows up in neatlogs as a named failure, not an empty success.
 - `explore` retries once when the agent recorded no screens, then stops and says why.
-- A map only counts if this run wrote screens to it, so an earlier map is never passed off as new.
-- `tests/test_empty_sessions.py` covers the empty and errored results, the retry, and keeping the earlier map.
+- A map counts only if this run wrote screens to it, so an earlier map is never passed off as new.
+- `tests/test_empty_sessions.py` covers the empty and errored results, the retry and keeping the earlier map.
 
 Every incident neatlogs raises about droid-monkey is handled the same way: read the trace, find the cause, fix it, add a test, and record it here.
 
@@ -425,13 +404,13 @@ Every incident neatlogs raises about droid-monkey is handled the same way: read 
 
 ## Business plan (cfo.ai)
 
-droid-monkey sells as a CI add-on for Android teams. The plan is built in cfo.ai from droid-monkey's own measured costs, and the plan in turn sets how much the agent may spend on each run.
+droid-monkey is designed to sell as a CI add-on for Android teams. The plan is built in cfo.ai from droid-monkey's own measured costs, and the plan in turn sets how much the agent may spend on each run.
 
 **Model (public, read-only): [cfo.ai/s/dcL7ulePdgkkZNCB](https://cfo.ai/s/dcL7ulePdgkkZNCB)** · full write-up: [docs/cfo-plan.md](docs/cfo-plan.md)
 
-1. **Measure:** `droid-monkey econ --app-dir <app> ...` reads every run and writes [`business/drivers.csv`](business/drivers.csv). Each row is a cost or an assumption, with its source and whether it was measured. Attacks cost $0 in model spend (31 s each). The money goes on fixes: $0.56 per fix attempt, $1.12 per verified fix.
-2. **Model:** cfo.ai's Ari built the model from `drivers.csv` with three plans (Free, Team $99, Scale $499, plus $3 per verified fix) and six scenarios over 18 months.
-3. **Enforce:** the 70% margin floor sets a fix budget per tier in `business/unit_economics.json`. `droid-monkey run --tier team` keeps attacking once the budget is spent but stops fixing, and each check is a `budget` GUARDRAIL span in neatlogs.
+1. **Measure:** `droid-monkey econ --app-dir <app> ...` reads every run and writes [`business/drivers.csv`](business/drivers.csv). Each row is a cost or an assumption, with its source and whether it was measured. Attacks cost $0 in model spend (31 s each). The money goes on fixes: $0.56 per fix attempt and $1.12 per verified fix.
+2. **Model:** cfo.ai's Ari built the model from `drivers.csv` with three plans (Free, Team at $99 and Scale at $499, each plus $3 per verified fix) and six scenarios over 18 months.
+3. **Enforce:** a 70% margin floor sets the fix budget for each tier in `business/unit_economics.json`. `droid-monkey run --tier team` keeps attacking once the budget is spent but stops fixing, and each check is a `budget` GUARDRAIL span in neatlogs.
 
 | Scenario | Scale margin | Team margin | Month-18 cash |
 |---|---|---|---|
@@ -440,21 +419,24 @@ droid-monkey sells as a CI add-on for Android teams. The plan is built in cfo.ai
 | Scale repriced ($986.97) | 70.0% | 69.8% | $29,732 |
 | Usage pricing | 74.0% | 80.7% | $44,764 |
 
-**What cfo.ai showed:** the fix budget is what keeps droid-monkey profitable. Without it, Scale loses money on every run. Scale at $499 covers only about 52% of expected fix demand; covering all of it at a 70% margin takes $986.97 a month. None of the six scenarios runs out of cash within 18 months.
+**What cfo.ai showed:** the fix budget is what keeps droid-monkey profitable. Without it, Scale loses money on every run. At $499, Scale covers only about 52% of expected fix demand, and covering all of it at a 70% margin takes $986.97 a month. None of the six scenarios runs out of cash within 18 months.
 
 ## Safety
 
 - **Consent:** no code changes without your explicit yes for each attempt, or `--auto-fix`.
 - **Isolation:** analysis and exploration work on a **copy** of your source. Fixes happen on a separate branch, and you're returned to yours at the end.
-- **Only the fix is kept:** droid-monkey keeps only edits inside `app/src` made by the coding agent, and discards anything else.
-- **No arbitrary commands:** attack specs are built only from validated building blocks. The coding agent never gets a shell (except Codex, inside its sandbox).
+- **Only the fix is kept:** droid-monkey keeps only the coding agent's edits inside `app/src` and discards anything else.
+- **No arbitrary commands:** attack specs are built only from validated building blocks. The coding agent never gets a shell, except Codex inside its sandbox.
+- **No live-backend actions:** droid-monkey never logs in, signs up, posts or pays on a live backend ([test accounts](#signed-in-screens-test-accounts)).
 - **Same code, same build:** droid-monkey never diagnoses a build that wasn't built from the source it's reading. It rebuilds when they differ.
+- **Your keys stay put:** keys are read from `~/.droid-monkey/.env`, never exported globally, and stripped from the coding agent's environment.
 
 ## Known limitations
 
 - Codex mode is implemented from OpenAI's docs but hasn't been tested end to end.
 - API-agent fixes have no Entire checkpoint yet.
-- Measurements come from a debug build on an emulator: slower than release on a phone, so a pass is conservative.
+- Measurements come from a debug build on an emulator, which is slower than a release build on a phone, so a pass is conservative.
+- All benchmark results above are single runs.
 
 ## Building in public
 
@@ -468,12 +450,8 @@ Posts on X during the hackathon ([@m_shubhasai](https://x.com/m_shubhasai), #nea
 | Oct 12, 18:50 | [The recovery path](https://x.com/m_shubhasai/status/2109635351279206501) | “Your fix is wrong.” The fix passed every test; droid-monkey revised its diagnosis and rethought the design. |
 | Oct 12, 22:11 | [**The submission**](https://x.com/m_shubhasai/status/2109685797603680453) | The demo video: a team of agents that breaks Android apps on purpose and fixes them with proof. |
 
-Landing page: [shubhasai.github.io/droid-monkey](https://shubhasai.github.io/droid-monkey/)
-
 ## Built with
 
-Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto · neatlogs · Entire
+Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto · neatlogs · Entire · cfo.ai
 
-Sample app: [shubhasai/MonkeyMart](https://github.com/shubhasai/MonkeyMart)
-
-License: [MIT](LICENSE)
+Sample app: [shubhasai/MonkeyMart](https://github.com/shubhasai/MonkeyMart) · License: [MIT](LICENSE)
