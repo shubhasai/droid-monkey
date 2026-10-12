@@ -19,6 +19,10 @@ class Device:
 
     # ---- app lifecycle -------------------------------------------------------------------------
 
+    # Debug builds often add a second launcher icon from a debugging library; the app's own screen is the one to use.
+    LIBRARY_LAUNCHERS = ("leakcanary.", "com.squareup.leakcanary", "com.chuckerteam.", "com.facebook.flipper",
+                         "com.github.anrwatchdog", "io.flutter.embedding.android.FlutterSplash")
+
     def launcher_activity(self) -> str:
         if self._activity is None:
             out = self.adb.shell(
@@ -26,6 +30,10 @@ class Device:
                 f"-c android.intent.category.LAUNCHER {self.package}"
             ).strip().splitlines()
             component = out[-1].strip() if out else ""
+            if not component.startswith(f"{self.package}/"):  # several launchers: Android answers with its chooser
+                component = pick_launcher(self.package, self.adb.shell(
+                    f"cmd package query-activities --brief -a android.intent.action.MAIN "
+                    f"-c android.intent.category.LAUNCHER {self.package}"))
             if "/" not in component:
                 raise AdbError(f"no launcher activity for {self.package}: is the app installed?")
             self._activity = component
@@ -329,3 +337,10 @@ class Device:
         self._changed.clear()
         if errors:
             raise AdbError("restore incomplete: " + "; ".join(errors))
+
+
+def pick_launcher(package: str, query_output: str) -> str:
+    """The app's own launcher from `cmd package query-activities` output, skipping debugging libraries' icons."""
+    found = [ln.strip() for ln in query_output.splitlines() if ln.strip().startswith(f"{package}/")]
+    own = [c for c in found if not any(lib in c.split("/", 1)[1] for lib in Device.LIBRARY_LAUNCHERS)]
+    return (own or found or [""])[0]

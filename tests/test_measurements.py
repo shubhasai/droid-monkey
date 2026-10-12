@@ -54,3 +54,14 @@ def test_a_hot_launch_is_not_accepted_as_cold(monkeypatch):
     adb = FakeAdb({"am start": "LaunchState: HOT\nTotalTime: 50\n", "resolve-activity": "com.example/.Main"})
     with pytest.raises(AdbError):
         Device(adb, "com.example").start_time("cold")
+
+
+def test_debug_libraries_launcher_icons_are_skipped():
+    from droid_monkey.tools.device import pick_launcher
+    out = """2 activities found:
+  Activity #0:
+    org.wikipedia.dev/leakcanary.internal.activity.LeakLauncherActivity
+  Activity #1:
+    org.wikipedia.dev/org.wikipedia.DefaultIcon
+"""
+    assert pick_launcher("org.wikipedia.dev", out) == "org.wikipedia.dev/org.wikipedia.DefaultIcon"
