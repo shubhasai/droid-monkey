@@ -369,7 +369,7 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: fl
 
 
 @main.command()
-@click.argument("name")
+@click.argument("name", default="builtin", required=False)
 @APP_DIR
 @click.option("--target", help="Screen id from the screen map (built-in attacks; default: the best candidate).")
 @click.option("--action", help="Trigger step, e.g. 'tap submit_button' (built-in attacks; default: the best candidate's).")
@@ -383,7 +383,7 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: fl
                                                "with its evidence (no code is changed).")
 def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_explore: bool, build: bool,
            run_id: str | None, screens: int | None, diagnose: bool) -> None:
-    """Run an attack: a built-in one, a saved spec by name, `builtin`, `custom` or `all`. No fixing."""
+    """Run an attack: a built-in one, a saved spec by name, `builtin` (the default), `custom` or `all`. No fixing."""
     theme.banner(f"attack {name}")
     best = None
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
