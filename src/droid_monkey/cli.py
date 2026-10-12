@@ -872,3 +872,18 @@ def compare(run_a: str, run_b: str, app_dir: Path) -> None:
     theme.header(f"{run_a}  vs  {run_b}")
     click.echo(md)
     theme.path_line("saved", out)
+
+
+@main.command()
+@APP_DIR
+@click.option("--port", default=8787, show_default=True, help="Local port (the dashboard listens on 127.0.0.1 only).")
+@click.option("--open/--no-open", "open_browser", default=True, help="Open it in the browser.")
+def dashboard(app_dir: Path, port: int, open_browser: bool) -> None:
+    """A live dashboard over everything in .droid-monkey: runs and their evidence, screens and heatmaps, the
+    analysis, user flows, saved attacks and the UX audit. It follows the folder: when anything changes, the open
+    page refreshes."""
+    from . import live
+    if not (app_dir / paths.DATA_DIR).exists():
+        raise click.ClickException(f"no .droid-monkey folder in {app_dir.resolve()}: run `droid-monkey init` there first")
+    live.serve(app_dir, port=port, open_browser=open_browser)
+
