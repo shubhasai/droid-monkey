@@ -155,6 +155,7 @@ def init(app_dir: Path, force: bool) -> None:
         theme.ok(f"wrote {cfg_path}")
         theme.kv("package", d.package)
         theme.kv("module", d.module)
+        theme.kv("variant", d.variant)
         theme.kv("avd", str(d.avd))
     theme.header("checking the jungle", "(o_O)")
     missing = 0
@@ -208,8 +209,15 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
     theme.kv("can do", ", ".join(prof.capabilities) or "none")
     theme.kv("asks for", ", ".join(x.rsplit('.', 1)[-1] for x in prof.dangerous_permissions) or "none")
     theme.header(f"{len(prof.signals)} risk signals: ripe bananas", "(^.^)")
+    by_kind: dict[str, list] = {}
     for s in prof.signals:
-        click.echo(f"  {style(f'{s.kind:36}', fg='yellow')} {style(f'{s.file}:{s.line}', fg='bright_black')}")
+        by_kind.setdefault(s.kind, []).append(s)
+    for kind, found in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):  # a real app has hundreds: group them
+        click.echo(f"  {style(f'{kind:36}', fg='yellow')} {len(found):>4}  "
+                   + style(", ".join(f"{Path(s.file).name}:{s.line}" for s in found[:3])
+                           + (f" +{len(found) - 3} more" if len(found) > 3 else ""), fg="bright_black"))
+    if len(prof.signals) > 3:
+        theme.note(f"every location: {paths.profile_path(cfg.app_dir)}")
     if not prof.signals:
         theme.note("none found by the static scan")
     theme.header("fault types that apply", "(>.<)")

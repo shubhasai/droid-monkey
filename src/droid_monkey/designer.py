@@ -279,7 +279,9 @@ def new_goal(prompt: str) -> str:
 FAULT_OF_BLOCK = {"dark_mode": "configuration_change", "font_scale": "configuration_change",
                   "locale": "configuration_change", "rotate": "rotation", "trim_memory": "low_memory",
                   "kill_in_background": "process_death", "network_off": "network_loss", "airplane_on": "network_loss",
-                  "revoke_permission": "permission_revoke", "cpu_stress": "performance", "anr": "performance"}
+                  "revoke_permission": "permission_revoke", "cpu_stress": "performance", "anr": "performance",
+                  "locale_rtl": "configuration_change", "rtl": "configuration_change",
+                  "airplane_mode": "network_loss", "airplane": "network_loss"}
 
 
 def flow_risks(flows: list[dict], existing: dict) -> list[tuple[dict, dict]]:
@@ -291,7 +293,9 @@ def flow_risks(flows: list[dict], existing: dict) -> list[tuple[dict, dict]]:
         for r in f.get("risks", []):
             fault = r.get("fault")
             if fault not in specs_mod.FAULT_TYPES and fault in FAULT_OF_BLOCK:
-                r = {**r, "fault": FAULT_OF_BLOCK[fault], "block": fault}
+                block = {"locale_rtl": "locale (ar, he, fa or ur: right-to-left)", "rtl": "locale (right-to-left)",
+                         "airplane_mode": "airplane_on", "airplane": "airplane_on", "anr": "cpu_stress"}.get(fault, fault)
+                r = {**r, "fault": FAULT_OF_BLOCK[fault], "block": block}
             if r.get("fault") in specs_mod.FAULT_TYPES and (f.get("name"), r["fault"]) not in covered:
                 out.append((f, r))
     return out
