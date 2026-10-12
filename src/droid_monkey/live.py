@@ -250,6 +250,8 @@ def _runs_table(rs: list[dict]) -> str:
 
 
 def page_overview(root: Path, app: Path) -> str:
+    from . import issues as issues_mod
+    found = issues_mod.collect(root)
     cfg = yaml.safe_load((app / "monkey.yaml").read_text()) if (app / "monkey.yaml").exists() else {}
     smap = _json(root / "screen-map.json") or _json(root / "screen-map.partial.json") or {}
     checklist = _json(root / "screens.json") or []
@@ -265,7 +267,8 @@ def page_overview(root: Path, app: Path) -> str:
         _stat("Runs", len(rs), f"{sum(1 for r in rs if r['live'])} running now", "/runs"),
         _stat("Screens mapped", len(smap.get("screens", {})), f"of {len(checklist)} in the code" if checklist else "",
               "/screens"),
-        _stat("Things that broke", broke, "across all runs", "/runs"),
+        _stat("Open issues", sum(1 for x in found if x.status != "fixed"),
+              f"{sum(1 for x in found if x.status == 'fixed')} fixed on branches", "/issues"),
         _stat("User flows", len(flows), f"{sum(len(f.get('risks', [])) for f in flows)} risks", "/flows"),
         _stat("UX findings", len(seen) if ux else "–", "from the last audit" if ux else "run droid-monkey ux", "/ux"),
         _stat("Risk signals", len(prof.get("signals", [])) if prof else "–",
