@@ -233,7 +233,7 @@ class Loop:
                 **self.usage(state)}
 
     def diagnose(self, state: RunState) -> RunState:
-        from .diagnoser import Diagnosis, diagnose
+        from .diagnoser import Diagnosis, DiagnosisError, diagnose
         if self.naive:
             d = Diagnosis(summary=f"survive {state['current']['name'].replace('_', ' ')}",
                           root_cause="Not diagnosed (naive baseline run).", files_to_change=[], fix_approach="",
@@ -241,9 +241,13 @@ class Loop:
             return {"diagnosis": d.to_dict(), "log": self.note(state, "diagnose: skipped (naive baseline)")}
         spec = self.spec(state["current"])
         screen = self.smap.screens.get(spec.screen)
-        d = diagnose(self.cfg.app_dir, self.cfg.module, self.cfg.llm, state["result"], spec.__dict__,
-                     asdict(screen) if screen else None, previous=state.get("diagnosis"),
-                     failure_note=state.get("failure_note", ""))
+        try:
+            d = diagnose(self.cfg.app_dir, self.cfg.module, self.cfg.llm, state["result"], spec.__dict__,
+                         asdict(screen) if screen else None, previous=state.get("diagnosis"),
+                         failure_note=state.get("failure_note", ""))
+        except DiagnosisError as e:  # nothing to propose: no question to ask, no code to change
+            return {"diagnosis": None, "failure_note": f"no diagnosis: {e}",
+                    "log": self.note(state, f"diagnose: failed ({e}); giving up on this attack")}
         log = self.note(state, f"diagnose: {d.root_cause}\n  files: {d.files_to_change}\n  test: {d.test_plan[:160]}")
         out = {"diagnosis": d.to_dict(), "log": log,
                "diag_tokens": state.get("diag_tokens", 0) + d.input_tokens + d.output_tokens,
@@ -350,15 +354,18 @@ class Loop:
         return {"last_good": sha, "outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1, "log": log}
 
     def give_up(self, state: RunState) -> RunState:
-        """Restore the sources to the last good commit and record the attack as unfixed."""
-        self._restore_last_good(state)
+        """Restore the sources to the last good commit (if a fix attempt changed them) and record the attack as
+        unfixed."""
+        if state.get("attempts", 0) > 0:
+            self._restore_last_good(state)
         res = state["result"]
         outcome = {"attack": state["current"]["name"], "status": "unfixed", "before": res["outcome"],
                    "before_detail": res.get("crash_signature") or res["reason"], "attempts": state.get("attempts", 0),
                    "diagnosis": state.get("diagnosis"), "reason": state.get("failure_note", "")[:500],
                    "metrics": self.metrics(state)}
         return {"outcomes": state.get("outcomes", []) + [outcome], "index": state["index"] + 1,
-                "log": self.note(state, f"give up: sources restored to {state['last_good'][:8]}")}
+                "log": self.note(state, "give up" + (f": sources restored to {state['last_good'][:8]}"
+                                                     if state.get("attempts", 0) > 0 else ": code unchanged"))}
 
     def _restore_last_good(self, state: RunState) -> None:
         git.discard(self.cfg.app_dir, git.dirty_paths(self.cfg.app_dir, f"{self.cfg.module}/src"))
@@ -432,7 +439,8 @@ class Loop:
         g.add_conditional_edges("decide", lambda s: {"diagnose": "diagnose", "retry": "diagnose",
                                                       "give_up": "give_up"}.get(s["decision"], "next_attack"),
                                 ["diagnose", "give_up", "next_attack"])
-        g.add_edge("diagnose", "approve")
+        g.add_conditional_edges("diagnose", lambda s: "approve" if s.get("diagnosis") else "give_up",
+                                ["approve", "give_up"])
         g.add_conditional_edges("approve", lambda s: "fix" if s.get("approval") in ("yes", "all") else "declined",
                                 ["fix", "declined"])
         g.add_edge("declined", "pick")

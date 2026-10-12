@@ -81,6 +81,12 @@ Then answer with ONLY this JSON object, no prose around it:
 Readable source files: {files}"""
 
 
+FILE_LIST_LIMIT = 300
+WRAP_UP = ("You have 2 more tool turns at most. Then answer with the JSON object from what you have found: if the "
+           "evidence does not pin the cause down, give the most likely cause, say what is uncertain in root_cause, "
+           "and keep files_to_change to the files you read.")
+
+
 def _failure_text(result: dict, spec: dict, screen: dict | None) -> str:
     lines = [f"attack: {spec.get('name')} ({spec.get('fault_type')}): {spec.get('description')}",
              f"steps: {json.dumps(spec.get('steps'))}",
@@ -115,7 +121,7 @@ def _parse(text: str) -> dict:
 
 
 def diagnose(app_dir, module: str, llm: LLMConfig, result: dict, spec: dict, screen: dict | None,
-             previous: dict | None = None, failure_note: str = "", max_turns: int = 16) -> Diagnosis:
+             previous: dict | None = None, failure_note: str = "", max_turns: int = 24) -> Diagnosis:
     tools_impl = CodeTools(app_dir, module)
     model = chat_model(llm)
     from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -150,14 +156,23 @@ def diagnose(app_dir, module: str, llm: LLMConfig, result: dict, spec: dict, scr
         ask += ("\n\nA previous fix based on this diagnosis FAILED verification:\n" + json.dumps(previous, indent=1)
                 + f"\nWhy it failed: {failure_note}\nRevise the hypothesis: find what the previous diagnosis missed. "
                   "Do not repeat it unchanged.")
-    messages = [SystemMessage(SYSTEM.format(files=sorted(tools_impl.files))), HumanMessage(ask)]
+    files = sorted(tools_impl.files)
+    if len(files) > FILE_LIST_LIMIT:  # a large app: the full list costs tokens on every turn and helps little
+        listed = f"{len(files)} files; use search_code / graph_search to find them. Behind the attacked screen: " + \
+                 str((screen or {}).get("files") or [])
+    else:
+        listed = str(files)
+    messages = [SystemMessage(SYSTEM.format(files=listed)), HumanMessage(ask)]
     tin = tout = 0
 
     @tracing.span(kind="WORKFLOW", name="diagnoser")
     def loop() -> Diagnosis:
         nonlocal tin, tout
         for turn in range(max_turns):
-            ai = bound.invoke(messages)
+            left = max_turns - turn
+            if left == 4:
+                messages.append(HumanMessage(WRAP_UP))
+            ai = (model if left <= 2 else bound).invoke(messages)  # the last turns answer without tools
             messages.append(ai)
             usage = getattr(ai, "usage_metadata", None) or {}
             tin += usage.get("input_tokens", 0)

@@ -522,11 +522,15 @@ def _attack_summary(results) -> None:
 def _suggest_fix(ctx, smap, spec, result, reason: str) -> None:
     from dataclasses import asdict
     from . import approval
-    from .diagnoser import diagnose as run_diagnoser
+    from .diagnoser import DiagnosisError, diagnose as run_diagnoser
     screen = smap.screens.get(spec.screen)
-    with theme.working("sniffing out the root cause..."):
-        d = run_diagnoser(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, asdict(result), spec.__dict__,
-                          asdict(screen) if screen else None)
+    try:
+        with theme.working("sniffing out the root cause..."):
+            d = run_diagnoser(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.llm, asdict(result), spec.__dict__,
+                              asdict(screen) if screen else None)
+    except DiagnosisError as e:
+        click.echo(f"  {theme.badge('skipped')} no diagnosis: {e}. The evidence is in {result.evidence_dir}")
+        return
     p = approval.proposal({"name": spec.name, "reason": reason}, asdict(result), d.to_dict())
     click.echo(approval.render(p, footer=False))
     (Path(result.evidence_dir) / "suggested-fix.json").write_text(json.dumps(p, indent=2))
