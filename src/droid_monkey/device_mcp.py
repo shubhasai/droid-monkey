@@ -38,6 +38,8 @@ def replay_step(node: ui.Node, selector: str) -> str:
 class GraphRecorder:
     def __init__(self, app_dir: Path, source_dir: Path, out: Path, max_screens: int = 0, deadline: float = 0):
         cfg = config_mod.load(app_dir)
+        from .explorer import load_ui_labels
+        load_ui_labels(cfg.app_dir)  # so taps on data rows are recorded by position (see explorer._selector)
         self.max_screens, self.deadline = max_screens, deadline  # 0: no limit
         serial = emulator.running_emulator()
         adb = Adb(serial) if serial else emulator.boot(cfg.avd or emulator.list_avds()[0])

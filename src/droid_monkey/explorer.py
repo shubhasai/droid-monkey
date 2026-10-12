@@ -84,7 +84,41 @@ def _similar(a: frozenset[str], b: frozenset[str], threshold: float = 0.6) -> bo
     return len(a & b) / max(1, len(a | b)) >= threshold
 
 
+# The app's own interface labels (its string resources), loaded by the explorers: text in a list row that is one of
+# them ("Donation reminders" in Settings) is a stable selector; any other text in a row is data (an article title,
+# a product, a search result) that changes from day to day, so that row is selected by its position instead.
+UI_LABELS: set[str] = set()
+
+
+def load_ui_labels(app_dir) -> None:
+    from .inventory import _strings
+    UI_LABELS.clear()
+    UI_LABELS.update(t.strip().lower() for t in _strings(app_dir).values() if t.strip())
+
+
+def _row_selector(node: ui.Node, screen: ui.Screen) -> str | None:
+    """`item:<list>:<row>[:c<k>]` for a tap in a list row that shows data: the k-th tappable element of the
+    row-th visible row, whatever that row shows today."""
+    if not node.row:
+        return None
+    key, _, idx = node.row.rpartition(":")
+    rows = screen.lists.get(key) or []
+    if int(idx) >= len(rows):
+        return None
+    row = rows[int(idx)]
+    words = [n.text or n.desc for n in screen.nodes if n.row == node.row and (n.text or n.desc) and not n.editable]
+    if words and all(t.strip().lower() in UI_LABELS for t in words):
+        return None  # a row of fixed labels (a settings list): its text is the better selector
+    if node is row.node:
+        return f"item:{node.row}"
+    return f"item:{node.row}:c{row.taps.index(node)}" if node in row.taps else f"item:{node.row}"
+
+
 def _selector(node: ui.Node, screen: ui.Screen | None = None) -> str:
+    if screen is not None and not node.editable:
+        positional = _row_selector(node, screen)
+        if positional:
+            return positional
     if node.rid:
         return node.rid
     if node.editable and screen is not None:  # an input's text is its value, which changes: use its position
@@ -122,6 +156,7 @@ class Explorer:
 
     def __init__(self, ctx: Context, max_screens: int = 12, max_actions: int = 10, budget_seconds: float = 900,
                  clear_data: bool = True):
+        load_ui_labels(ctx.cfg.app_dir)
         self.d = AppDriver(ctx, ctx.run_dir / "explore")
         self.adb, self.device, self.cfg, self.notes = ctx.adb, ctx.device, ctx.cfg, self.d.notes
         self.max_screens, self.max_actions, self.budget = max_screens, max_actions, budget_seconds

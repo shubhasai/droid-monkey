@@ -4,7 +4,7 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .adb import Adb, AdbError
 
@@ -23,6 +23,7 @@ class Node:
     scrollable: bool
     focused: bool
     content: bool = False  # inside a list row or a web page: data, which says nothing about which screen this is
+    row: str = ""          # "<list>:<index>" when inside the index-th visible row of a scrolling list
 
     @property
     def editable(self) -> bool:
@@ -42,9 +43,16 @@ class Node:
 
 
 @dataclass
+class Row:
+    node: Node                 # the row itself
+    taps: list[Node]           # its tappable elements, in screen order (the row first when it is tappable)
+
+
+@dataclass
 class Screen:
     xml: str
     nodes: list[Node]
+    lists: dict[str, list[Row]] = field(default_factory=dict)  # list key -> its visible rows, top to bottom
 
     def find(self, selector: str) -> Node | None:
         """Find by resource-id, then text, then content-desc. `text:` / `desc:` force one kind (case-insensitive).
@@ -56,6 +64,19 @@ class Screen:
                 if node:
                     return node
             return None
+        if selector.startswith("item:"):  # a list row by position: works whatever the list shows today
+            m = re.fullmatch(r"item:(.+):(\d+)(?::c(\d+))?", selector)
+            if not m:
+                return None
+            rows = self.lists.get(m.group(1)) or (next(iter(self.lists.values())) if len(self.lists) == 1 else None)
+            i = int(m.group(2))
+            if not rows or i >= len(rows):
+                return None
+            row = rows[i]
+            if m.group(3) is None:
+                return row.node
+            k = int(m.group(3))
+            return row.taps[k] if k < len(row.taps) else None
         if selector.startswith("field:"):  # the Nth input field on screen, for fields with no resource id
             fields = [n for n in self.nodes if n.editable and n.area > 0]
             i = int(selector[6:])
@@ -143,13 +164,25 @@ def _rows(el: ET.Element) -> list[ET.Element]:
 def parse(xml: str) -> Screen:
     root = ET.fromstring(xml)
     content: set[int] = set()  # ids of elements inside list rows or web pages
+    row_of: dict[int, str] = {}  # element id -> "<list>:<index>"
+    list_rows: dict[str, list[ET.Element]] = {}
+    unnamed = 0
     for el in root.iter("node"):
         if "WebView" in el.get("class", ""):
             content |= {id(d) for d in el.iter("node") if d is not el}
         elif el.get("scrollable") == "true":
-            for row in _rows(el):
-                content |= {id(d) for d in row.iter("node")}
-    nodes = []
+            rows = _rows(el)
+            if not rows:
+                continue
+            key = el.get("resource-id", "")
+            if not key or key in list_rows:  # lists without an id are numbered in screen order
+                key, unnamed = f"#{unnamed}", unnamed + 1
+            list_rows[key] = rows
+            for i, row in enumerate(rows):
+                for d in row.iter("node"):
+                    content.add(id(d))
+                    row_of.setdefault(id(d), f"{key}:{i}")  # an inner list's rows keep their own position
+    nodes, by_el = [], {}
     for el in root.iter("node"):
         m = _BOUNDS.match(el.get("bounds", ""))
         bounds = tuple(int(v) for v in m.groups()) if m else (0, 0, 0, 0)
@@ -157,9 +190,12 @@ def parse(xml: str) -> Screen:
             rid=el.get("resource-id", ""), cls=el.get("class", ""), text=_value(el),
             desc=el.get("content-desc", ""), package=el.get("package", ""), bounds=bounds,  # type: ignore[arg-type]
             clickable=el.get("clickable") == "true", scrollable=el.get("scrollable") == "true",
-            focused=el.get("focused") == "true", content=id(el) in content,
+            focused=el.get("focused") == "true", content=id(el) in content, row=row_of.get(id(el), ""),
         ))
-    return Screen(xml=xml, nodes=nodes)
+        by_el[id(el)] = nodes[-1]
+    lists = {key: [Row(node=by_el[id(r)], taps=[by_el[id(d)] for d in r.iter("node") if d.get("clickable") == "true"])
+                   for r in rows] for key, rows in list_rows.items()}
+    return Screen(xml=xml, nodes=nodes, lists=lists)
 
 
 _RESUMED = re.compile(r"(?:topResumedActivity|mResumedActivity|ResumedActivity)[:=]\s*ActivityRecord\{\S+ \S+ ([\w.]+)/([\w.$]+)")
