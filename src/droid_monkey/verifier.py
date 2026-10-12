@@ -66,7 +66,7 @@ def verify(ctx: Context, spec: Spec, test_files: list[str], attempt: int = 1) ->
         reason = "replay survived but the fix added no regression test"
     else:
         reason = f"replay survived but {test.test_class} failed:\n{test.log_tail[-1500:]}"
-    return VerifyResult(replay_ok and test_ok, reason, True, build.seconds, "", replay, test)
+    return VerifyResult(replay_ok and test_ok, reason, True, build.seconds, "", replay=replay, test=test)
 
 
 def build_failure_note(v: VerifyResult) -> str:
