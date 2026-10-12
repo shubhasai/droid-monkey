@@ -205,6 +205,7 @@ def init(app_dir: Path, force: bool) -> None:
             raise click.ClickException("no Android application module with an applicationId found here; "
                                        "run init from the app repo's root")
         init_cmd.write_config(app_dir, d)
+        paths.data_dir(app_dir)  # .droid-monkey/ and its .gitignore, so the dashboard has a folder to follow
         theme.ok(f"wrote {cfg_path}")
         theme.kv("package", d.package)
         theme.kv("module", d.module)
@@ -905,9 +906,9 @@ def dashboard(app_dir: Path, port: int, open_browser: bool) -> None:
     analysis, user flows, saved attacks and the UX audit. It follows the folder: when anything changes, the open
     page refreshes."""
     from . import live
-    if not (app_dir / paths.DATA_DIR).exists():
-        raise click.ClickException(f"no .droid-monkey folder in {app_dir.resolve()}: run `droid-monkey init` there first")
-    live.serve(app_dir, port=port, open_browser=open_browser)
+    if not (app_dir / config_mod.CONFIG_NAME).exists():
+        raise click.ClickException(f"no {config_mod.CONFIG_NAME} in {app_dir.resolve()}: run `droid-monkey init` there first")
+    live.serve(app_dir, port=port, open_browser=open_browser)  # creates .droid-monkey/ if nothing has written to it yet
 
 
 
@@ -964,3 +965,59 @@ def hunt(app_dir: Path, use_model: bool, run_id: str | None, build: bool | None)
                           f"${res.usage['cost_usd']:.3f}; {res.usage['dropped_unquoted']} unquoted claims dropped")
     theme.path_line("report", res.out_dir / "HUNT.md")
     theme.path_line("evidence", res.out_dir)
+
+
+@main.command("issues")
+@APP_DIR
+@click.option("--rerank", is_flag=True, help="Rank every issue again (otherwise only new ones are sent to Jev).")
+@click.option("--no-jev", is_flag=True, help="Rank by severity only.")
+def issues_cmd(app_dir: Path, rerank: bool, no_jev: bool) -> None:
+    """Every open issue (attacks, hunt, UX audit), ranked by user impact with Jev, and how to fix each."""
+    from . import issues as issues_mod
+    theme.banner("issues")
+    cfg = config_mod.load(app_dir)
+    root = paths.data_dir(cfg.app_dir)
+    if rerank:
+        issues_mod.rerank(root)
+    ranked, note = issues_mod.rank(root, issues_mod.collect(root), cfg.package, use_jev=not no_jev)
+    if note:
+        theme.warn(note)
+    theme.header(f"{len(ranked)} open issues, most harmful first")
+    for n, x in enumerate(ranked, 1):
+        click.echo(f"  {n:>2}. {style(f'{x.score:.2f}', bold=True)} {style(x.source, fg='cyan'):14} {x.title[:70]}"
+                   + ("" if x.observed else style("  (suspected)", fg="bright_black")))
+        click.echo(style(f"      {x.rank_reason} · fix: droid-monkey {' '.join(x.fix_args)}", fg="bright_black"))
+
+
+@main.command("fix")
+@click.argument("issue_id")
+@APP_DIR
+@AGENT
+@click.option("--model", default=None, help="Model for the coding agent.")
+def fix_cmd(issue_id: str, app_dir: Path, agent: str | None, model: str | None) -> None:
+    """Fix one hunt or UX issue (ids from `droid-monkey issues` or the dashboard), with your consent: the coding
+    agent fixes it on a branch, the issue is re-checked on the device, and it is committed only if it is gone."""
+    from . import fixer, issues as issues_mod
+    from .tracing import load_keys
+    load_keys()
+    theme.banner("fix")
+    ctx = _context(app_dir, time.strftime(f"fix-%Y%m%d-%H%M%S"))
+    root = paths.data_dir(ctx.cfg.app_dir)
+    ranked, _ = issues_mod.rank(root, issues_mod.collect(root), ctx.cfg.package, use_jev=False)
+    x = next((i for i in ranked if i.id.startswith(issue_id)), None)
+    if not x:
+        raise click.ClickException(f"no open issue {issue_id}: see `droid-monkey issues`")
+    if x.source == "attack":
+        raise click.ClickException(f"attack failures are fixed by replaying the attack: droid-monkey run --attacks {x.attack}")
+    _load_app(ctx)
+    backend, chosen = _agent(ctx.cfg, agent, model)
+
+    def ask() -> str:
+        if not _interactive():
+            theme.warn("not a terminal: not changing code")
+            return "no"
+        a = click.prompt("(o.o)? Fix it? [y]es / [n]o", default="n", show_default=False,
+                         type=click.Choice(["y", "n", "yes", "no"], case_sensitive=False))
+        return "yes" if a.lower().startswith("y") else "no"
+
+    click.echo(fixer.fix(ctx, x, backend, chosen, ask))

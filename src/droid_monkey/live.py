@@ -631,7 +631,47 @@ def page_job(root: Path, app: Path, job_id: str, jobs=None) -> str:
 <script>const JOB={json.dumps(job.id)};const NO_RELOAD=true;</script>"""
 
 
-PAGES = {"/": ("Overview", page_overview), "/commands": ("Commands", page_commands), "/runs": ("Runs", page_runs), "/screens": ("Screens", page_screens),
+def page_issues(root: Path, app: Path, jobs=None) -> str:
+    """Every open issue, ranked (Jev when it has ranked them; severity otherwise), each with a Fix button."""
+    from . import issues as issues_mod
+    found = issues_mod.collect(root)
+    cache = json.loads((root / "issues-rank.json").read_text()) if (root / "issues-rank.json").exists() else {}
+    for x in found:
+        r = cache.get(x.id)
+        if r:
+            x.score, x.rank_reason, x.ranked_by = r["score"], r["reason"], r["by"]
+        else:
+            x.score, x.rank_reason = issues_mod._fallback(x)
+            x.ranked_by = "not ranked yet"
+    found.sort(key=lambda x: -x.score)
+    new = sum(1 for x in found if x.ranked_by == "not ranked yet")
+    busy = jobs.busy() if jobs else None
+    rows = []
+    for n, x in enumerate(found, 1):
+        tone = "bad" if x.score >= 0.6 else "warn" if x.score >= 0.4 else "idle"
+        how = ("replays the identical attack after the fix" if x.source == "attack" else
+               "re-walks the steps on the device after the fix" if x.source == "hunt" else "rebuilds and screenshots")
+        ev = "".join(f"<li><code>{esc(e[:160])}</code></li>" for e in x.evidence[:3])
+        rows.append(f"""<article class="issue" data-src="{esc(x.source)}">
+<div class="rank"><span class="rn">{n}</span><span class="score s-{tone}">{x.score:.2f}</span></div>
+<div class="ibody"><h3>{esc(x.title)}</h3>
+<p class="imeta"><span class="chip c-idle">{esc(x.source)}</span> {esc(x.severity)}{' · screen ' + esc(x.screen) if x.screen else ''}
+{' · <i>suspected in code</i>' if not x.observed else ''} · found {esc(x.found)} in <code>{esc(x.run)}</code></p>
+<p class="why"><b>{'Jev' if x.ranked_by == 'jev' else 'Ranked'}:</b> {esc(x.rank_reason)}</p>
+<p>{esc(x.detail[:400])}</p>{f'<ul class="iev">{ev}</ul>' if ev else ''}</div>
+<div class="ifix"><button type="button" class="run fixbtn" data-cmd="{esc(x.fix_args[0])}" data-arg="{esc(x.attack if x.source == 'attack' else x.id)}"{" disabled" if busy else ""}>Fix</button>
+<span class="hint">asks you first · {how}</span></div></article>""")
+    return f"""<header class="top"><h1>Issues</h1><p class="meta">{len(found)} open issues from every attack, hunt and UX audit,
+most harmful first. Jev (TypeSafe) scores each one: expected impact on users × how likely it is a real bug.</p>
+<p class="actions"><button type="button" class="btn rankbtn" data-all="0">{f'Rank {new} new with Jev' if new else 'All ranked'}</button>
+<button type="button" class="btn rankbtn" data-all="1">Re-rank all</button><span class="hint rankmsg"></span></p>
+{('<a class="busy" href="/job/' + esc(busy.id) + '">Running: ' + esc(busy.command) + ' → open</a>') if busy else ''}</header>
+<div class="filters" role="group"><button type="button" class="on" data-f="all">All</button><button type="button" data-f="attack">Attacks</button>
+<button type="button" data-f="hunt">Hunt</button><button type="button" data-f="ux">UX</button></div>
+<div class="issues">{''.join(rows) or '<p class="hint">No open issues. Run Find bugs or Attack first.</p>'}</div>"""
+
+
+PAGES = {"/": ("Overview", page_overview), "/issues": ("Issues", page_issues), "/commands": ("Commands", page_commands), "/runs": ("Runs", page_runs), "/screens": ("Screens", page_screens),
          "/analysis": ("Analysis", page_analysis), "/flows": ("Flows", page_flows),
          "/attacks": ("Attacks", page_attacks), "/ux": ("UX audit", page_ux), "/files": ("Files", page_files)}
 
@@ -697,6 +737,8 @@ class _Handler(BaseHTTPRequestHandler):
                 body, title = page_job(self.root, self.app, path[len("/job/"):].strip("/"), self.jobs), "Job"
             elif path == "/commands":
                 body, title = page_commands(self.root, self.app, self.jobs), "Commands"
+            elif path == "/issues":
+                body, title = page_issues(self.root, self.app, self.jobs), "Issues"
             elif path in PAGES:
                 title, fn = PAGES[path]
                 body = fn(self.root, self.app)
@@ -737,6 +779,13 @@ class _Handler(BaseHTTPRequestHandler):
                     raise ValueError("this command publishes; confirm it first")
                 job = self.jobs.start(cmd.path, jobs_mod.argv(cmd, body.get("values") or {}))
                 return self._send(200, json.dumps(job.public()).encode(), "application/json")
+            if path == "/api/issues/rank":
+                from . import issues as issues_mod
+                if body.get("all"):
+                    issues_mod.rerank(self.root)
+                pkg = (yaml.safe_load((self.app / "monkey.yaml").read_text()) or {}).get("package", self.app.name)
+                ranked, note = issues_mod.rank(self.root, issues_mod.collect(self.root), pkg)
+                return self._send(200, json.dumps({"ranked": len(ranked), "note": note}).encode(), "application/json")
             m = re.fullmatch(r"/api/jobs/([\w.-]+)/(answer|stop)", path)
             if m:
                 if m.group(2) == "answer":
@@ -920,6 +969,15 @@ button.run:disabled{opacity:.45;cursor:not-allowed}
 .answers button{font:600 13px var(--body);border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:7px;padding:6px 16px;cursor:pointer}
 .answers button.yes{background:var(--ok);color:var(--bg);border-color:var(--ok)}
 .answers input{font:14px var(--body);padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+.filters{display:flex;gap:6px;flex-wrap:wrap}.filters button{font:500 13px var(--body);border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:4px 14px;cursor:pointer}
+.filters button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.issues{display:grid;gap:10px}.issue{display:grid;grid-template-columns:64px minmax(0,1fr) 170px;gap:16px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;align-items:start}
+.rank{display:grid;justify-items:center;gap:4px}.rn{font:600 12px var(--mono);color:var(--muted)}
+.score{font:700 20px var(--display);font-variant-numeric:tabular-nums}.score.s-bad{color:var(--bad)}.score.s-warn{color:var(--warn)}.score.s-idle{color:var(--muted)}
+.ibody{min-width:0;display:grid;gap:4px}.ibody p{margin:0;font-size:14px}.imeta{color:var(--muted);font-size:13px!important}
+.why{font-size:13px!important}.iev{margin:2px 0 0;padding-left:16px;font-size:12.5px}
+.ifix{display:grid;gap:6px;justify-items:stretch}.ifix .hint{font-size:12px}
+@media (max-width:760px){.issue{grid-template-columns:48px minmax(0,1fr)}.ifix{grid-column:1/-1}}
 @media (max-width:1050px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (max-width:820px){.frame{grid-template-columns:minmax(0,1fr);padding-inline:16px}.rail{position:static}.rail ol{display:flex;flex-wrap:wrap}
   .two{grid-template-columns:minmax(0,1fr)}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -985,6 +1043,21 @@ panels.forEach(f=>{preview(f);f.addEventListener('input',()=>preview(f));f.addEv
     b.disabled=true;b.textContent='Starting…';
     try{const j=await api('/api/jobs',{command:f.dataset.cmd,values:values(f),confirm});location.href='/job/'+j.id}
     catch(err){b.disabled=false;b.textContent='Run';let m=f.querySelector('.err');if(!m){m=document.createElement('p');m.className='err';b.parentNode.after(m)}m.textContent=err.message}})});
+// Issues page: rank with Jev, filter, and Fix (starts the fix as a job; it asks you before changing code)
+document.querySelectorAll('.rankbtn').forEach(b=>b.addEventListener('click',async()=>{
+  const msg=document.querySelector('.rankmsg');document.querySelectorAll('.rankbtn').forEach(x=>x.disabled=true);
+  msg.textContent='Jev is reading the issues…';
+  try{const r=await api('/api/issues/rank',{all:b.dataset.all==='1'});msg.textContent=r.note||('ranked '+r.ranked);location.reload()}
+  catch(e){msg.textContent=e.message;document.querySelectorAll('.rankbtn').forEach(x=>x.disabled=false)}}));
+document.querySelectorAll('.issues ~ * , .filters [data-f]').forEach(()=>{});
+document.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('[data-f]').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.issue').forEach(i=>i.hidden=b.dataset.f!=='all'&&i.dataset.src!==b.dataset.f)}));
+document.querySelectorAll('.fixbtn').forEach(b=>b.addEventListener('click',async()=>{
+  b.disabled=true;b.textContent='Starting…';
+  const values=b.dataset.cmd==='run'?{only:b.dataset.arg}:{issue_id:b.dataset.arg};
+  try{const j=await api('/api/jobs',{command:b.dataset.cmd,values});location.href='/job/'+j.id}
+  catch(e){b.disabled=false;b.textContent='Fix';alert(e.message)}}));
 // Job page: stream the output, show the question, answer it, stop
 if(typeof JOB!=='undefined'){
   const con=document.getElementById('console'),ask=document.getElementById('ask'),q=document.getElementById('question'),
@@ -1008,4 +1081,3 @@ if(typeof JOB!=='undefined'){
     try{await api('/api/jobs/'+encodeURIComponent(JOB)+'/stop')}catch(e){stop.disabled=false;stop.textContent='Stop'}});
 }
 """
-

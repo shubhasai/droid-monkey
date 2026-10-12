@@ -314,6 +314,11 @@ GUIDES = [
           ["device", "model", "code"], "~5–20 min · cents to a few $", ["screen-map.json"], ["only", "screens", "auto_fix"],
           {"only": "Only these attacks (comma-separated)", "screens": "Screens per attack",
            "auto_fix": "Fix without asking (CI only)", "agent": "Coding agent", "resume_id": "Resume a run (its id)"}),
+    Guide("fix", "Fix one issue", "Fixes a single hunt or UX issue from the Issues page: asks you first, re-checks it "
+          "on the device, commits only if it is gone. Attack failures use Find, fix and verify.", "Fix",
+          ["device", "model", "code"], "a few min · cents", ["screen-map.json"], ["issue_id"], {"issue_id": "Issue id"}),
+    Guide("issues", "Rank all issues", "Ranks every open issue by user impact with Jev.", "Tools", [], "seconds",
+          [], ["rerank"], {"rerank": "Rank every issue again"}),
     Guide("ux", "Audit the UX", "Reviews every screen: touch targets, labels, predicted attention, measured "
           "waits; then asks you about each change.", "UX", ["model", "code"], "~3 min · ~$1",
           ["screen-map.json"], ["apply"], {"apply": "Ask me about each finding and make the ones I accept"}),
