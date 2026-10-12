@@ -44,6 +44,9 @@ Work in this order:
    whose "near labels" you can see or reach in the fewest taps. On each new screen, call record_screen with its
    checklist name, one sentence on its purpose, and its files (the checklist's file, plus its ViewModel and the
    repositories it calls if you know them). Treat repeated list rows as one unless the code shows they differ.
+   Interruptions: if a tap shows a promo, survey, what's-new, rating prompt or onboarding instead of the screen you
+   meant ("activity in front" tells you which Activity it is), record it as its own screen named for what it is
+   (e.g. "Year in Review promo"), close it (Close, X, Not now, Skip), and then record the real screen.
    A screen showing data (an article, a product, a search result, a profile) is ONE screen whatever it shows:
    record the first one only. record_screen says "duplicate" when a screen is already recorded; then move on.
 3. Do not wander: skip cosmetic options (themes, font sizes, toggles) unless they open a checklist screen, and do

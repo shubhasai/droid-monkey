@@ -68,13 +68,14 @@ class SpecRunner:
     def _start_screen(self) -> Target:
         # Specs fill forms explicitly with a `fill` step, so the start screen is only navigated to.
         t = self.driver.target(self.spec.screen)
-        return Target(name=t.name, steps=list(t.steps), fill=False)
+        return Target(name=t.name, steps=list(t.steps), fill=False, fingerprint=list(t.fingerprint))
 
     def _execute(self) -> tuple[Verdict, dict[str, str], dict[str, str]]:
         d, spec = self.driver, self.spec
         self.device.restore()
         d.fresh(clear_data=True)  # same clean data state the screen's path was recorded from
         d.go_to(self._start_screen())
+        d.check_arrival(self._start_screen())  # never attack a promo or a dialog that covered the screen
         start_screen = d.snapshot("before")
         screen_rec = self.device.record_start()
         if not screen_rec:

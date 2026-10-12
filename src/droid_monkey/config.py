@@ -16,6 +16,7 @@ class Target:
     name: str
     steps: list[str] = field(default_factory=list)
     fill: bool = False  # type sample values into every editable field once there
+    fingerprint: list[str] = field(default_factory=list)  # what the screen looked like when mapped (to check arrival)
 
 
 @dataclass

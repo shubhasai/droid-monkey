@@ -2,6 +2,7 @@
 handle permission prompts, read crashes, and save evidence. Used by the spec runner and the explorer; it injects
 no faults itself."""
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +44,10 @@ PERMISSION_ALLOW_IDS = [
 # Buttons that close a keyboard's own one-time sheets (Gboard's "Try out your stylus", tips, surveys). These belong to
 # the input method, not the app: left open they cover the app and every later check sees the keyboard's sheet.
 DISMISS_LABELS = {"cancel", "not now", "no thanks", "skip", "dismiss", "close", "got it", "maybe later"}
+# Controls that close an app's own interruption (a promo, survey, what's-new, rating prompt) without acting on it.
+# Used only when a replay's next target is missing: the interruption is then what is in the way.
+INTERRUPTION_CLOSE = re.compile(r"^(close|dismiss|not now|no thanks|maybe later|later|skip|got it|cancel|x|✕|×|"
+                                r"close (dialog|sheet|banner|promo))$", re.I)
 
 
 class NavigationError(AdbError):
@@ -102,6 +107,23 @@ class AppDriver:
         if target.fill:
             self.fill_form()
 
+    def check_arrival(self, target: Target) -> None:
+        """The replayed path ended on the screen it was mapped to; if something covers it (a promo, a survey),
+        close that once and look again. Raises NavigationError when it is still a different screen, so an attack
+        is never run, and judged, on the wrong one."""
+        want = frozenset(target.fingerprint)
+        if not any(t.startswith(("id:", "desc:", "text:", "edit:")) for t in want):
+            return  # a map from an older droid-monkey (class names only): nothing to compare; re-explore to check
+        from .explorer import _similar
+        for attempt in range(2):
+            screen, _, _ = self.settle(timeout=self.NAV_SETTLE)
+            if _similar(screen.fingerprint(self.package), want):
+                return
+            if attempt == 0 and not self.close_interruption(screen):
+                break
+        raise NavigationError(f"replaying the path to '{target.name}' ended on a different screen "
+                              f"(something covers it, or the app changed): not attacking the wrong screen")
+
     def _guard(self, node, screen, trusted: bool) -> None:
         """Refuse a tap that would act on the app's live backend (see safety.py)."""
         from .safety import outward_reason
@@ -113,14 +135,33 @@ class AppDriver:
                                 "a payment). Set live_backend: false or allow_actions in monkey.yaml for a test backend.")
 
     def _find(self, selector: str, timeout: float):
-        """Wait for an element; returns (node, the screen it was found on) or (None, None)."""
-        deadline = time.time() + timeout
+        """Wait for an element; returns (node, the screen it was found on) or (None, None). If it has not shown
+        after a few seconds and the app shows an interruption (a promo, survey, what's-new sheet), close it once."""
+        start = time.time()
+        deadline, closed = start + timeout, False
         while True:
             screen = ui.dump(self.adb)
             node = screen.find(selector)
             if node or time.time() >= deadline:
                 return node, (screen if node else None)
+            if not closed and time.time() - start > 3:
+                closed = self.close_interruption(screen)
             time.sleep(0.3)
+
+    def close_interruption(self, screen: ui.Screen) -> bool:
+        """Tap the app's own close / not-now control. Only called when a replay's target is missing, so whatever
+        covers the screen is in the way; it never acts on the interruption (no 'Explore', 'Donate', 'Rate')."""
+        from .safety import labels
+        for n in screen.app_nodes(self.package):
+            if not (n.clickable and n.area):
+                continue
+            label = next((x.strip() for x in labels(n, screen) if INTERRUPTION_CLOSE.match(x.strip())), "")
+            if label:  # its own text, or the label on its icon (Compose puts it on a child)
+                ui.tap(self.adb, n)
+                self.notes.append(f"closed an interruption ('{label}') that covered the next step's target")
+                time.sleep(0.8)
+                return True
+        return False
 
     def step(self, step: str, trusted: bool = False) -> None:
         """One replayable step.

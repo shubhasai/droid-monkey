@@ -131,7 +131,8 @@ def _load_app(ctx: Context, re_explore: bool = False):
         _print_map(smap)
     else:
         smap = ScreenMap.load(_map_path(ctx))
-    ctx.targets = {sid: Target(name=sid, steps=list(s.path), fill=s.has_form) for sid, s in smap.screens.items()}
+    ctx.targets = {sid: Target(name=sid, steps=list(s.path), fill=s.has_form, fingerprint=list(s.fingerprint))
+                   for sid, s in smap.screens.items()}
     prof = profile_mod.analyze(ctx.cfg.app_dir, ctx.cfg.package, ctx.cfg.module, ctx.cfg.variant)
     known = specs_mod.Known(
         screens=set(smap.screens),

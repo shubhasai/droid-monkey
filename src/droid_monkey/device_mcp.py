@@ -100,9 +100,12 @@ class GraphRecorder:
 
     def describe(self, screen: ui.Screen, header: str = "") -> str:
         """Compact screen description for the model, with numbered elements it can act on."""
-        sid = self.match(screen)
+        act = self.activity()
+        sid = self.match(screen, act)
         fg = screen.foreground_package()
         lines = [header] if header else []
+        if act:
+            lines.append(f"activity in front: {act}")
         if self.d.is_permission_prompt(screen):
             msg = next((n.text for n in screen.nodes if "permission_message" in n.rid), "")
             lines.append(f"SYSTEM PERMISSION PROMPT: {msg!r}. Call allow_permission or deny_permission.")
@@ -332,6 +335,11 @@ class GraphRecorder:
         except Exception:  # evidence is best effort; the map is what matters here
             pass
         note = f" Files not found in the source: {missing}." if missing else ""
+        named = re.search(r"(\w+Activity)\b", name)
+        if act and named and named.group(1).lower() != act.lower():
+            note += (f" Note: you named it after {named.group(1)}, but {act} is in front. If this is a promo, "
+                     "survey, dialog or onboarding that covered the screen you wanted, rename it for what it is "
+                     "(record_screen again with that name), close it, and record the screen underneath separately.")
         limit = f" {self.limit_note()}" if self.limit_note() else ""
         return f"recorded '{sid}' (path {len(self.path)} steps, {len(fields)} input fields, {len(found)} files).{note}{limit}"
 
