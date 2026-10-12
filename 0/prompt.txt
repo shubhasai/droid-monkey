@@ -1,0 +1,11 @@
+push the code but I was asking for the improvement of agents
+
+---
+
+the main issue is it is limited to only determinestic attacks not logical or run time issues that I guess can be added 
+
+see issue and attacks are different current we are not finding bugs or issues
+
+---
+
+yes build hunt
