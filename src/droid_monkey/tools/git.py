@@ -113,6 +113,9 @@ def commit(app_dir: Path, paths: list[str], message: str) -> tuple[str, str | No
     return head(app_dir), checkpoint
 
 
-def reset_hard(app_dir: Path, sha: str) -> None:
-    """Back to a known-good commit on the run branch (used when a fix breaks the build)."""
-    _git(app_dir, "reset", "--hard", sha)
+def reset_keep(app_dir: Path, sha: str) -> None:
+    """Move the run branch back to a known-good commit without touching uncommitted changes droid-monkey did not
+    make (the developer's own edits outside the app's sources, e.g. a Gradle file). Unlike --hard, git refuses
+    instead of discarding anything it would lose."""
+    if rev(app_dir, "HEAD") != rev(app_dir, sha):
+        _git(app_dir, "reset", "--keep", sha)

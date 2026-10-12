@@ -368,8 +368,11 @@ class Loop:
                                                      if state.get("attempts", 0) > 0 else ": code unchanged"))}
 
     def _restore_last_good(self, state: RunState) -> None:
+        """Undo a failed fix: the app's sources were clean when the run started (start_run_branch checks), so every
+        change there is the coding agent's. Nothing outside them is touched: the developer's own uncommitted edits
+        stay."""
         git.discard(self.cfg.app_dir, git.dirty_paths(self.cfg.app_dir, f"{self.cfg.module}/src"))
-        git.reset_hard(self.cfg.app_dir, state["last_good"])
+        git.reset_keep(self.cfg.app_dir, state["last_good"])
         build = gradle.build(self.cfg.app_dir, self.cfg.module, self.cfg.variant, java_home=self.cfg.java_home)
         if build.ok and build.apk:
             gradle.install(self.ctx.adb, build.apk, package=self.cfg.package, source_dir=self.cfg.app_dir)
