@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4R4XARFYVZVQMZKRDPAM2A7",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "site/assets/sponsors/cfo-model.webp",
+    "site/assets/sponsors/cfo-scenarios.webp",
+    "site/assets/sponsors/entire-commit.webp",
+    "site/assets/sponsors/entire-droid-monkey.webp",
+    "site/assets/sponsors/entire-sessions.webp",
+    "site/assets/sponsors/neatlogs-incident.webp",
+    "site/assets/sponsors/neatlogs-tools.webp",
+    "site/assets/sponsors/neatlogs-trace.webp",
+    "site/index.html"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 112,
+    "cache_creation_tokens": 108691,
+    "cache_read_tokens": 26934011,
+    "output_tokens": 42700,
+    "api_call_count": 56
+  }
+}
