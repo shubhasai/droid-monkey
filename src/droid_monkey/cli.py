@@ -117,6 +117,19 @@ def _load_app(ctx: Context, re_explore: bool = False):
     return smap, prof, saved, known
 
 
+def _run_spec(ctx: Context, spec, name: str):
+    """Run one attack. Explore does not replay every path up front, so this is where a path that no longer replays
+    shows up: report it and go on with the next attack."""
+    from .driver import NavigationError
+    try:
+        with theme.working(f"monkeying with the app: {name}..."):
+            return SpecRunner(ctx, spec).run()
+    except NavigationError as e:
+        click.echo(f"  {theme.badge('skipped')} could not reach screen '{spec.screen}': {str(e)[:160]}")
+        theme.note("its recorded path does not replay; re-check all paths with `droid-monkey explore --from-partial`")
+        return None
+
+
 def _echo_result(name: str, result) -> None:
     detail = result.exception or result.reason
     lines = [detail] if detail else []
@@ -264,11 +277,13 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
 @click.option("--minutes", type=float, default=None, help="Agent mode time limit (default: explore_minutes in "
               "monkey.yaml, 10). What was mapped by then is kept.")
 @click.option("--max-screens", type=int, default=None, help="Agent mode screen limit (default: explore_max_screens, 60).")
+@click.option("--check-paths", is_flag=True, help="Agent mode: after exploring, replay every recorded path from a "
+              "fresh launch (slow: ~10-20 s per screen). By default each path is checked when an attack uses it.")
 @click.option("--from-partial", is_flag=True, help="Don't explore: re-check the paths of the map an interrupted "
               "agent run saved (screen-map.partial.json), or of the saved map, and make it the map.")
 @AGENT
 def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: float | None,
-            max_screens: int | None, from_partial: bool) -> None:
+            max_screens: int | None, check_paths: bool, from_partial: bool) -> None:
     """Explore the installed app and save its screen graph (no faults injected)."""
     theme.banner("explore")
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
@@ -325,9 +340,13 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: fl
             smap = res.smap
             theme.ok(f"explored {len(smap.screens)} screens in {res.seconds:.0f}s, ${res.cost_usd:.2f}")
             click.echo(f"\n{res.summary[:1500]}")
-        theme.header(f"replaying every recorded path (limit {ctx.cfg.verify_minutes:g} min)")
-        with theme.working("retracing the monkey's steps..."):
-            checks = claude_explore.verify_paths(ctx, smap, minutes=ctx.cfg.verify_minutes)
+        checks = {}
+        if check_paths or from_partial:
+            theme.header(f"replaying every recorded path (limit {ctx.cfg.verify_minutes:g} min)")
+            with theme.working("retracing the monkey's steps..."):
+                checks = claude_explore.verify_paths(ctx, smap, minutes=ctx.cfg.verify_minutes)
+        else:
+            theme.note("paths are checked when an attack replays them (`--check-paths` replays them all now)")
         for sid, verdict in checks.items():
             if verdict == "ok":
                 click.echo(f"  {style('(^.^)', fg='green')} {sid:24} " + style("replays", fg="green"))
@@ -338,7 +357,7 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None, minutes: fl
         bad = [sid for sid, v in checks.items() if v not in ("ok", "not checked")]
         if bad:
             smap.unreached += [{"screen": sid, "reason": f"recorded path does not replay ({checks[sid]})"} for sid in bad]
-        smap.save(_map_path(ctx))  # replaces the previous map only now that the run finished and was checked
+        smap.save(_map_path(ctx))  # replaces the previous map only now that the run finished
         partial.unlink(missing_ok=True)
     _print_map(smap)
     theme.header("where the monkey will strike", "(>.<)")
@@ -417,8 +436,9 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
                 spec, best = a["spec"], None
                 theme.header(a["name"], "(>.<)")
                 click.echo(style(f"  {a['reason']}", fg="bright_black"))
-                with theme.working(f"monkeying with the app: {a['name']}..."):
-                    result = SpecRunner(ctx, spec).run()
+                result = _run_spec(ctx, spec, a["name"])
+                if result is None:
+                    continue
                 results.append(result)
                 _echo_result(a["name"], result)
                 if diagnose and result.outcome not in ("survived", "skipped"):
@@ -446,8 +466,9 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
                 click.echo(f"  {theme.badge('skipped')} {e}")
                 continue
             click.echo(style(f"  {best.reason}", fg="bright_black"))
-        with theme.working(f"monkeying with the app: {attack_name}..."):
-            result = SpecRunner(ctx, spec).run()
+        result = _run_spec(ctx, spec, attack_name)
+        if result is None:
+            continue
         results.append(result)
         _echo_result(attack_name, result)
         if diagnose and result.outcome not in ("survived", "skipped"):
