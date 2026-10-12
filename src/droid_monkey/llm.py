@@ -6,6 +6,8 @@ monkey.yaml, all optional:
       model: claude-haiku-5-5
       base_url: https://api.anthropic.com
       api_key_env: DROID_MONKEY_API_KEY
+      price_in: 1.0                  # USD per million input tokens, for a model droid-monkey has no price for
+      price_out: 5.0                 # (e.g. through a LiteLLM proxy); without them its calls show no cost
 """
 
 import os
@@ -21,11 +23,17 @@ class LLMConfig:
     base_url: str | None = None
     api_key_env: str = "DROID_MONKEY_API_KEY"
     max_tokens: int = 8000
+    price_in: float | None = None
+    price_out: float | None = None
 
     @staticmethod
     def from_dict(raw: dict | None) -> "LLMConfig":
         raw = raw or {}
-        return LLMConfig(**{k: v for k, v in raw.items() if k in LLMConfig.__dataclass_fields__})
+        cfg = LLMConfig(**{k: v for k, v in raw.items() if k in LLMConfig.__dataclass_fields__})
+        if cfg.price_in is not None and cfg.price_out is not None:
+            from . import pricing
+            pricing.register(cfg.model, float(cfg.price_in), float(cfg.price_out))
+        return cfg
 
 
 class LLMConfigError(RuntimeError):

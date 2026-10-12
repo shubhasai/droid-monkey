@@ -16,7 +16,16 @@ CACHE_READ = {"claude-haiku-5-5": 0.1, "claude-sonnet-5-5": 0.1, "claude-opus-5-
 CACHE_WRITE = 1.25  # 5-minute cache writes
 
 
+def register(model: str, price_in: float, price_out: float, cache_read: float = 0.1) -> None:
+    """Prices for a model set in monkey.yaml (llm.price_in / price_out, USD per million tokens), e.g. one reached
+    through a proxy under its own name. An exact name wins over the built-in prefixes."""
+    PRICES[model] = [(float("inf"), price_in, price_out)]
+    CACHE_READ[model] = cache_read
+
+
 def _family(model: str) -> str | None:
+    if model in PRICES:
+        return model
     return next((p for p in PRICES if model and model.startswith(p)), None)
 
 

@@ -34,3 +34,12 @@ def test_llm_spans_get_neatlogs_tokens_and_cost():
     assert a["neatlogs.llm.model_name"] == "claude-haiku-5-5"
     assert (a["neatlogs.llm.token_count.prompt"], a["neatlogs.llm.token_count.completion"]) == (13000, 900)
     assert a["neatlogs.llm.cost_usd"] == 0.00175
+
+
+def test_a_proxy_model_can_be_priced_from_monkey_yaml():
+    from droid_monkey.llm import LLMConfig
+    from droid_monkey.pricing import cost_usd
+    assert cost_usd("claude-haiku", 1_000_000, 0) is None
+    LLMConfig.from_dict({"provider": "openai_compatible", "model": "claude-haiku", "base_url": "https://x/v1",
+                         "price_in": 1.0, "price_out": 5.0})
+    assert cost_usd("claude-haiku", 1_000_000, 200_000) == 2.0
