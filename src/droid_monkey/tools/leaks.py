@@ -65,7 +65,8 @@ def destroyed(adb: Adb) -> list[str]:
             continue
         key = f"{owner.rsplit('.', 1)[-1]} ({callback})" if owner != cls else f"{cls.rsplit('.', 1)[-1]} ({callback})"
         counts[key] = counts.get(key, 0) + 1
-    return [f"{k} x{n}" if n > 1 else k for k, n in counts.items()]
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])  # the screen the attack recreated comes first
+    return [f"{k} x{n}" if n > 1 else k for k, n in ranked]
 
 
 def dump_heap(adb: Adb, package: str, out: Path, timeout: float = 90) -> Path:

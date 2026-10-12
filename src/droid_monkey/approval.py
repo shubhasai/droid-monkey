@@ -30,7 +30,7 @@ def proposal(item: dict, result: dict, diagnosis: dict) -> dict:
                         f"Java heap {b['java_heap_kb'] // 1024} -> {a['java_heap_kb'] // 1024} MB")
     leak = metrics.get("leak") or {}
     if leak.get("destroyed"):
-        evidence.append("destroyed during the attack (LeakCanary): " + ", ".join(leak["destroyed"][:6]))
+        evidence.append("destroyed during the attack (LeakCanary), most first: " + ", ".join(leak["destroyed"]))
     if leak.get("trace"):
         evidence.append("leak trace (Shark): " + (", ".join(leak.get("leaking") or []) or "see leak-trace.txt"))
         evidence += ["  " + line for line in leak["trace"].splitlines()

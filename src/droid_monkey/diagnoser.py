@@ -105,7 +105,12 @@ def _failure_text(result: dict, spec: dict, screen: dict | None) -> str:
         lines.append(f"memory after forced GC: before {metrics['memory_before']}, after {metrics.get('memory_after')}")
     leak = metrics.get("leak") or {}
     if leak.get("destroyed"):
-        lines.append("destroyed during the attack (LeakCanary's log): " + ", ".join(leak["destroyed"]))
+        ranked = sorted(leak["destroyed"], key=lambda d: -int(d.rsplit(" x", 1)[1]) if " x" in d else -1)
+        lines.append("destroyed during the attack (LeakCanary's log), most first: " + ", ".join(ranked))
+        lines.append("The leaked Activities are most likely instances of the Activity destroyed most often (the attack "
+                     "recreated it); an Activity destroyed once cannot account for more leaked instances than that. "
+                     "Start from that Activity's onCreate and what it hands its `this` to (libraries, singletons, "
+                     "listeners, initializers), and check the counts before blaming another screen.")
     if leak.get("trace"):
         lines.append("Shark (LeakCanary's heap analyser) on a heap dump after the attack. Each trace is the reference "
                      "chain from a GC root to the leaked object; references under ~~~ are the suspects, the leak is "
