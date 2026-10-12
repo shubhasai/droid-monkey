@@ -5,7 +5,7 @@
 | Use | How | Code |
 |---|---|---|
 | **Checkpoints on fixes** | Entire is enabled on the app repo (MonkeyMart). droid-monkey's coding agent runs as a Claude Code session in that repo, so Entire records the session. Every fix commit droid-monkey makes carries an `Entire-Checkpoint: <id>` trailer linking it to that session | [`tools/git.py`](../src/droid_monkey/tools/git.py) `commit` returns the checkpoint; run reports, fix records and PR bodies show it |
-| **Code graph for diagnosis** | The diagnoser can call `entire graph search --query … --repo <app> --format json` to find the symbols, callers and covering tests involved in a failure. Results are limited to the app's own source files | [`codetools.py`](../src/droid_monkey/codetools.py) `graph_search` |
+| **Code graph for diagnosis** | The diagnoser has a `graph_search` tool that runs `entire graph search --query … --repo <app> --format json` and keeps only the app's own source files. On MonkeyMart's 6 bugs it put the bug's lines in the top 3 for 4 and the right file for 6: [entire-graph.md](entire-graph.md). In the runs traced in neatlogs, the diagnoser chose `read_code` and `search_code` instead | [`codetools.py`](../src/droid_monkey/codetools.py) `graph_search` |
 | **Setup check** | `droid-monkey init` checks that the Entire CLI and its plugin are installed and says how to install them | [`init_cmd.py`](../src/droid_monkey/init_cmd.py) |
 | **Proof of authorship** | Entire is enabled on droid-monkey itself, so the Claude Code sessions that built it during the hackathon are recorded as checkpoints | this repo |
 
