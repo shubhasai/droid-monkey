@@ -213,6 +213,25 @@ Every incident neatlogs raises about droid-monkey is handled the same way: read 
 |---|---|---|---|
 | Explorer returns empty response without mapping screens (`981cb137`, medium) | `explore` session: no tool calls, empty answer, zero output tokens | Empty or errored `claude -p` results counted as success; `explore` could return an older map as this run's | Empty or errored sessions fail with a reason (`claude_code.error`, ERROR status); explore retries once; only a map this run wrote counts |
 
+## Business plan (cfo.ai)
+
+droid-monkey sells as a CI add-on for Android teams. The plan is built in cfo.ai from droid-monkey's own measured costs, and the plan in turn sets how much the agent may spend on each run.
+
+**Model (public, read-only): [cfo.ai/s/dcL7ulePdgkkZNCB](https://cfo.ai/s/dcL7ulePdgkkZNCB)** · full write-up: [docs/cfo-plan.md](docs/cfo-plan.md)
+
+1. **Measure:** `droid-monkey econ --app-dir <app> ...` reads every run and writes [`business/drivers.csv`](business/drivers.csv). Each row is a cost or an assumption, with its source and whether it was measured. Attacks cost $0 in model spend (31 s each). The money goes on fixes: $0.56 per fix attempt, $1.12 per verified fix.
+2. **Model:** cfo.ai's Ari built the model from `drivers.csv` with three plans (Free, Team $99, Scale $499, plus $3 per verified fix) and six scenarios over 18 months.
+3. **Enforce:** the 70% margin floor sets a fix budget per tier in `business/unit_economics.json`. `droid-monkey run --tier team` keeps attacking once the budget is spent but stops fixing, and each check is a `budget` GUARDRAIL span in neatlogs.
+
+| Scenario | Scale margin | Team margin | Month-18 cash |
+|---|---|---|---|
+| Base | 67.1% | 69.8% | $22,618 |
+| No budget cap | **−5.6%** | 45.0% | $10,852 |
+| Scale repriced ($986.97) | 70.0% | 69.8% | $29,732 |
+| Usage pricing | 74.0% | 80.7% | $44,764 |
+
+**What cfo.ai showed:** the fix budget is what keeps droid-monkey profitable. Without it, Scale loses money on every run. Scale at $499 covers only about 52% of expected fix demand; covering all of it at a 70% margin takes $986.97 a month. None of the six scenarios runs out of cash within 18 months.
+
 ## Safety
 
 - **Consent:** no code changes without your explicit yes for each attempt, or `--auto-fix`.
