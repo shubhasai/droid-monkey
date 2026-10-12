@@ -113,6 +113,15 @@ class Screen:
         return next((n.package for n in self.nodes if n.package and n.package != "com.android.systemui"), "")
 
 
+def _value(el: ET.Element) -> str:
+    """An element's text, except an empty field's placeholder, which Android reports as its text (with the same
+    string as `hint`): 'Search Wikipedia' in an empty search box is not a value the user typed."""
+    text, hint = el.get("text", ""), el.get("hint", "")
+    if hint and text == hint and any(k in el.get("class", "") for k in ("EditText", "AutoCompleteTextView")):
+        return ""
+    return text
+
+
 def _rows(el: ET.Element) -> list[ET.Element]:
     """The repeated rows of a scrolling container: children (looking through up to two single-child wrappers)
     of which at least two share a shape (class and resource id) and are items, i.e. tappable or holding other
@@ -145,7 +154,7 @@ def parse(xml: str) -> Screen:
         m = _BOUNDS.match(el.get("bounds", ""))
         bounds = tuple(int(v) for v in m.groups()) if m else (0, 0, 0, 0)
         nodes.append(Node(
-            rid=el.get("resource-id", ""), cls=el.get("class", ""), text=el.get("text", ""),
+            rid=el.get("resource-id", ""), cls=el.get("class", ""), text=_value(el),
             desc=el.get("content-desc", ""), package=el.get("package", ""), bounds=bounds,  # type: ignore[arg-type]
             clickable=el.get("clickable") == "true", scrollable=el.get("scrollable") == "true",
             focused=el.get("focused") == "true", content=id(el) in content,

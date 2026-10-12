@@ -61,3 +61,10 @@ def test_search_view_field_is_editable():
     xml = (f'<hierarchy><node class="android.widget.AutoCompleteTextView" resource-id="{PKG}:id/search_src_text" '
            f'text="" package="{PKG}" bounds="[0,0][100,50]" clickable="true"/></hierarchy>')
     assert [n.rid for n in ui.parse(xml).editable_fields(PKG)] == [f"{PKG}:id/search_src_text"]
+
+
+def test_placeholder_is_not_a_value():
+    xml = (f'<hierarchy><node class="android.widget.AutoCompleteTextView" text="Search Wikipedia" hint="Search Wikipedia" '
+           f'package="{PKG}" bounds="[0,0][100,50]"/><node class="android.widget.EditText" text="Bengaluru" hint="City" '
+           f'package="{PKG}" bounds="[0,60][100,110]"/></hierarchy>')
+    assert [n.text for n in ui.parse(xml).editable_fields(PKG)] == ["", "Bengaluru"]
