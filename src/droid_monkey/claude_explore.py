@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .analysis import _profile_brief, source_snapshot
-from .config import Target
 from .driver import AppDriver, Context, NavigationError
 from .explorer import ScreenMap, _similar
 from .tools.adb import AdbError
@@ -130,13 +129,24 @@ def verify_paths(ctx: Context, smap: ScreenMap, minutes: float = 0) -> dict[str,
     deadline = time.time() + minutes * 60 if minutes else 0
     driver = AppDriver(ctx, ctx.run_dir / "verify-paths")
     results: dict[str, str] = {}
+    dead: dict[tuple, str] = {}  # path prefix whose last step failed -> why; paths sharing it fail without a replay
     for sid, info in sorted(smap.screens.items(), key=lambda kv: len(kv[1].path)):
         if deadline and time.time() > deadline:
             results[sid] = "not checked"
             continue
+        steps = list(info.path)
+        prefix = next((pre for pre in dead if tuple(steps[:len(pre)]) == pre), None)
+        if prefix is not None:
+            results[sid] = dead[prefix]
+            continue
         try:
             driver.fresh(clear_data=True)
-            driver.go_to(Target(name=sid, steps=list(info.path)))
+            for i, step in enumerate(steps):
+                try:
+                    driver.step(step)
+                except NavigationError as e:
+                    dead[tuple(steps[:i + 1])] = f"fails: {e}"
+                    raise
             screen, _, _ = driver.settle()
             ok = _similar(screen.fingerprint(smap.package), frozenset(info.fingerprint))
             results[sid] = "ok" if ok else "lands on a different screen"
