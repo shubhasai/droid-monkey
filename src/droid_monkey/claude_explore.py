@@ -120,27 +120,42 @@ def run(app_dir: Path, profile: AppProfile, out: Path, flows: list[dict], model:
         device = agents.McpServer("device", "droid_monkey.device_mcp",
                                   ["--app-dir", str(app_dir), "--source", str(work), "--out", str(out),
                                    "--max-screens", str(max_screens), "--deadline", str(started + minutes * 60)])
-        try:
-            result = agents.run(
-                agent,
-                PROMPT.format(profile=_profile_brief(profile), flows=flows_text + signed_in + limits, checklist=checklist),
-                cwd=work,
-                allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
-                servers=[device],
-                model=model,
-                timeout=hard_timeout,
-                name="explore",
-                llm=llm,
-                max_budget_usd=max_usd,
-            )
-            cost, session, summary = result.cost_usd, result.session_id, result.text
-        except claude_code.ClaudeCodeError as e:
-            if not out.exists():
-                raise
-            cost, session = 0.0, ""
-            summary = f"stopped at the limit ({e}); keeping the {len(ScreenMap.load(out).screens)} screens recorded so far."
-    if not out.exists():
-        raise claude_code.ClaudeCodeError(f"exploration produced no graph: {summary[:400]}")
+        prompt = PROMPT.format(profile=_profile_brief(profile), flows=flows_text + signed_in + limits, checklist=checklist)
+
+        def recorded() -> bool:  # this run wrote screens (an older map on disk, or an empty one, does not count)
+            try:
+                return out.exists() and out.stat().st_mtime >= started and bool(ScreenMap.load(out).screens)
+            except (OSError, ValueError):
+                return False
+
+        cost, session, summary, why = 0.0, "", "", ""
+        for attempt in range(2):  # a session that ends without doing anything is retried once
+            try:
+                result = agents.run(agent, prompt, cwd=work,
+                                    allowed_tools=["Read", "Grep", "Glob"] + [f"mcp__device__{t}" for t in DEVICE_TOOLS],
+                                    servers=[device], model=model, timeout=max(60.0, started + hard_timeout - time.time()),
+                                    name="explore" if attempt == 0 else "explore.retry", llm=llm, max_budget_usd=max_usd)
+            except claude_code.ClaudeCodeError as e:
+                if not recorded():
+                    raise
+                summary = f"stopped at the limit ({e}); keeping the {len(ScreenMap.load(out).screens)} screens recorded so far."
+                break
+            cost += result.cost_usd
+            session, summary, why = result.session_id, result.text, getattr(result, "error", "")
+            if recorded():
+                if why:
+                    summary = (f"the agent stopped early ({why}); keeping the {len(ScreenMap.load(out).screens)} "
+                               f"screens recorded so far. {summary}").strip()
+                break
+            if attempt == 0 and time.time() - started < minutes * 60 / 2:
+                print(f"  explore: the agent recorded no screens ({why or 'it finished without using the device'}); "
+                      "retrying once", flush=True)
+                continue
+            break
+    if not recorded():
+        raise claude_code.ClaudeCodeError(
+            "exploration recorded no screens: " + (why or "the agent finished without using the device")
+            + (f" ({summary[:300]})" if summary else "") + ". Nothing was saved; an earlier map is left as it was.")
     return ClaudeExploreResult(ScreenMap.load(out), cost, round(time.time() - started, 1), session, summary)
 
 

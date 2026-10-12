@@ -119,7 +119,9 @@ class ClaudeCodeSpan:
             s.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
             s.set_attribute("neatlogs.llm.output_messages.0.content", (result.text or "")[:4000])
             s.set_attribute("claude_code.turns", int(result.turns or 0))
-            s.set_status(StatusCode.OK if result.ok else StatusCode.ERROR)
+            if getattr(result, "error", ""):
+                s.set_attribute("claude_code.error", result.error[:300])
+            s.set_status(StatusCode.OK) if result.ok else s.set_status(StatusCode.ERROR, (getattr(result, "error", "") or "failed")[:300])
         else:
             s.set_status(StatusCode.ERROR, (error or "")[:300])
         s.end()

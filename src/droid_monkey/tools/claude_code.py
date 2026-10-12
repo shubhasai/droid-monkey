@@ -25,6 +25,18 @@ class ClaudeResult:
     turns: int
     seconds: float
     usage: dict = field(default_factory=dict)
+    error: str = ""         # why the session failed: Claude Code's error subtype, or "empty" (nothing came back)
+
+
+def failure(data: dict) -> str:
+    """Why a `claude -p` result is a failure, or "" when it is not. An empty answer with no output tokens is a
+    failure too: the session ended without doing anything (neatlogs incident: explorer returned empty)."""
+    if data.get("is_error"):
+        return f"{data.get('subtype') or 'error'}: {str(data.get('result') or '')[:200]}".strip(": ")
+    out = int((data.get("usage") or {}).get("output_tokens") or 0)
+    if not str(data.get("result") or "").strip() and out == 0:
+        return f"empty: the session returned no text and no output tokens after {data.get('num_turns') or 0} turn(s)"
+    return ""
 
 
 def claude_path() -> str:
@@ -86,8 +98,10 @@ def _run(prompt, cwd, allowed_tools, model, resume, timeout, mcp_config, disallo
         raise ClaudeCodeError(f"claude -p returned non-JSON output: {out[:300]}") from e
     if not data:
         raise ClaudeCodeError(f"claude -p failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
+    why = failure(data)
     return ClaudeResult(
-        ok=not data.get("is_error", False),
+        ok=not why,
+        error=why,
         text=str(data.get("result", "")),
         session_id=data.get("session_id", ""),
         cost_usd=float(data.get("total_cost_usd") or 0.0),
