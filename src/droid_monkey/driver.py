@@ -215,7 +215,8 @@ class AppDriver:
     # ---- watching --------------------------------------------------------------------------------
 
     def settle(self, timeout: float = 12.0) -> tuple[ui.Screen, float, bool]:
-        """Dump until two consecutive dumps match and no progress indicator shows. Returns (screen, seconds, saw_progress)."""
+        """Dump until two consecutive dumps show the same content and no progress indicator shows (positions may keep
+        moving: animations). Returns (screen, seconds, saw_progress)."""
         start = time.time()
         prev = ui.dump(self.adb)
         saw_progress = self.has_progress(prev)
@@ -224,7 +225,7 @@ class AppDriver:
             cur = ui.dump(self.adb)
             busy = self.has_progress(cur)
             saw_progress |= busy
-            if cur.xml == prev.xml and not busy:
+            if cur.content() == prev.content() and not busy:
                 return cur, round(time.time() - start, 1), saw_progress
             prev = cur
         return prev, round(time.time() - start, 1), saw_progress

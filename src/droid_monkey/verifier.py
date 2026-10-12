@@ -42,6 +42,8 @@ def verify(ctx: Context, spec: Spec, test_files: list[str], attempt: int = 1) ->
         for attempt in range(2):
             if instrumented:
                 ctx.device.make_room()
+                from .tools import ui
+                ui.release(ctx.adb)  # instrumented tests need the UI-automation slot
             test = gradle.run_test(cfg.app_dir, cfg.module, cfg.variant, test_file, java_home=cfg.java_home)
             if test.kind == "instrumented":
                 gradle.install(ctx.adb, build.apk, package=cfg.package, source_dir=cfg.app_dir)  # connected tests uninstall the app when they finish

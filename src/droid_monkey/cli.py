@@ -247,9 +247,10 @@ def analyze(app_dir: Path, static_only: bool, model: str, agent: str | None) -> 
 
 @main.command()
 @APP_DIR
-@click.option("--mode", type=click.Choice(["agent", "claude", "rules"]), default="agent", show_default=True,
-              help="agent: the coding agent reads the code and drives the app (screens + files). rules: free "
-                   "tap-everything exploration without a model. (claude is the old name for agent.)")
+@click.option("--mode", type=click.Choice(["agent", "claude", "jev", "rules"]), default="agent", show_default=True,
+              help="agent: the coding agent reads the code and drives the app (screens + files). jev: fast, "
+                   "TypeSafe's Jev ranks each screen's elements toward the analysed flows (needs TYPESAFE_API_KEY). "
+                   "rules: free tap-everything exploration without a model. (claude is the old name for agent.)")
 @click.option("--model", default="claude-sonnet-5-5", show_default=True, help="Model for agent mode.")
 @AGENT
 def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
@@ -258,6 +259,17 @@ def explore(app_dir: Path, mode: str, model: str, agent: str | None) -> None:
     ctx = _context(app_dir, time.strftime("explore-%Y%m%d-%H%M%S"))
     if mode == "rules":
         smap = _explore(ctx)
+    elif mode == "jev":
+        from .designer import load_flows
+        from .jev_explore import JevExplorer
+        from .tracing import load_keys
+        load_keys()
+        explorer = JevExplorer(ctx, load_flows(ctx.cfg.app_dir))
+        with theme.working("swinging through your screens (Jev picks each next tap)..."):
+            smap = explorer.explore()
+        smap.save(_map_path(ctx))
+        for note in explorer.notes:
+            theme.note(note)
     else:
         from . import claude_explore
         from .designer import load_flows

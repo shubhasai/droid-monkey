@@ -1,5 +1,6 @@
 """Read the screen through uiautomator: parsed nodes, element lookup, and editable-field values for any app."""
 
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -93,6 +94,12 @@ class Screen:
                 tokens.add(f"text:{n.text[:30]}")
         return frozenset(tokens or {n.cls for n in self.app_nodes(package)})
 
+    def content(self) -> tuple:
+        """What is on screen, without positions: animations (carousels, shimmer, moving images) change bounds on
+        every dump, so comparing whole dumps never settles on a live app."""
+        return tuple(sorted((n.package, n.rid, n.cls, n.text[:60], n.desc[:60], n.editable)
+                            for n in self.nodes if n.area > 0))
+
     def scrollable(self, package: str) -> Node | None:
         candidates = [n for n in self.app_nodes(package) if n.scrollable]
         return max(candidates, key=lambda n: n.area, default=None)
@@ -116,8 +123,59 @@ def parse(xml: str) -> Screen:
     return Screen(xml=xml, nodes=nodes)
 
 
+# Fast screen reads: uiautomator2's on-device helper answers in ~30 ms, where `uiautomator dump` waits for the app
+# to go idle and takes 2-3 s on a live app. Android allows one UI-automation client at a time, so the helper is
+# shared per device, a stale holder is cleared once, and `release` frees it (classic dumps and instrumented tests
+# need the slot). DROID_MONKEY_FAST_DUMP=0 turns it off.
+_FAST: dict[str, object] = {}
+_FAST_OFF: set[str] = set()
+
+
+def _fast(adb: Adb):
+    key = adb.serial or "default"
+    if os.environ.get("DROID_MONKEY_FAST_DUMP") == "0" or key in _FAST_OFF:
+        return None
+    if key in _FAST:
+        return _FAST[key]
+    try:
+        import logging
+        import uiautomator2 as u2
+        logging.getLogger("uiautomator2").setLevel(logging.ERROR)
+        for attempt in range(2):
+            try:
+                _FAST[key] = u2.connect(adb.serial)
+                return _FAST[key]
+            except Exception as e:
+                if attempt == 0 and "already registered" in str(e):  # a stuck `uiautomator dump` holds the slot
+                    adb.shell("pkill -f 'uiautomator dump'; pkill -x uiautomator", check=False)
+                    time.sleep(1)
+                    continue
+                raise
+    except Exception:
+        _FAST_OFF.add(key)  # no helper on this device: classic dumps from now on
+    return None
+
+
+def release(adb: Adb) -> None:
+    """Stop the fast helper so the UI-automation slot is free (classic dumps, instrumented tests)."""
+    d = _FAST.pop(adb.serial or "default", None)
+    if d is not None:
+        try:
+            d.stop_uiautomator()
+        except Exception:
+            pass
+
+
 def dump(adb: Adb, retries: int = 3) -> Screen:
-    """One uiautomator dump (~1-2 s). Retries when the UI never goes idle (animations)."""
+    """The current screen: the fast helper when available, else one `uiautomator dump` (retried when the UI never
+    goes idle)."""
+    d = _fast(adb)
+    if d is not None:
+        try:
+            return parse(d.dump_hierarchy())
+        except Exception:
+            release(adb)  # the helper died (device restarted?): the next read reconnects
+            _FAST_OFF.discard(adb.serial or "default")
     last = ""
     for _ in range(retries):
         out = adb.run("exec-out", "uiautomator", "dump", "/dev/tty", check=False, timeout=30)
