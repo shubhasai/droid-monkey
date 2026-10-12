@@ -54,7 +54,11 @@ def build(app_dir: Path, module: str = "app", variant: str = "debug", timeout: f
         ["./gradlew", _variant_task(module, variant, "assemble"), "--console=plain", "-q"],
         cwd=app_dir, capture_output=True, text=True, timeout=timeout, env=gradle_env(java_home),
     )
-    apks = sorted((app_dir / module / "build" / "outputs" / "apk" / variant).glob("*.apk"), key=lambda p: p.stat().st_mtime)
+    # A flavored variant lands in outputs/apk/<flavor>/<buildType>/ (devDebug -> dev/debug); a plain one in apk/debug/.
+    out = app_dir / module / "build" / "outputs" / "apk"
+    apks = sorted((p for p in out.rglob("*.apk") if "androidTest" not in p.parts
+                   and "".join(p.relative_to(out).parts[:-1]).lower() == variant.lower()),
+                  key=lambda p: p.stat().st_mtime)
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-40:])
     return BuildResult(proc.returncode == 0, time.time() - start, apks[-1] if apks else None, tail)
 

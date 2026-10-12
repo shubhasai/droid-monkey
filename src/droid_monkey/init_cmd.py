@@ -17,6 +17,7 @@ class Detected:
     package: str | None
     avd: str | None
     java_home: str | None = None
+    variant: str = "debug"
 
 
 def gradle_major(app_dir: Path) -> int | None:
@@ -37,14 +38,59 @@ def compatible_jdk(app_dir: Path) -> str | None:
     return None
 
 
-def find_app_module(app_dir: Path) -> tuple[str | None, str | None]:
-    """The module that applies the Android application plugin, and its applicationId."""
+_ID = r"""\s*=?\s*\(?\s*["']([\w.]+)["']"""  # applicationId "x", = "x" or 'x' (Kotlin DSL and Groovy)
+
+
+def _block(text: str, name: str) -> str | None:
+    """The body of the first `name { ... }` block, braces matched."""
+    m = re.search(rf"\b{name}\s*\{{", text)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while i < len(text) and depth:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+    return text[m.end():i - 1]
+
+
+def _entries(body: str) -> list[tuple[str, str]]:
+    """Top-level `name { ... }` or `create("name") { ... }` entries of a block, in order."""
+    out, i = [], 0
+    pat = re.compile(r"""(?:create|register|maybeCreate)?\(?\s*["']?([A-Za-z]\w*)["']?\s*\)?\s*\{""")
+    while (m := pat.search(body, i)):
+        depth, j = 1, m.end()
+        while j < len(body) and depth:
+            depth += {"{": 1, "}": -1}.get(body[j], 0)
+            j += 1
+        out.append((m.group(1), body[m.end():j - 1]))
+        i = j
+    return out
+
+
+def default_variant(text: str) -> tuple[str, str]:
+    """(variant, applicationId suffix) for a debug build: the default flavor (isDefault, else the first) plus
+    debug, e.g. ('devDebug', '.dev'). Without flavors: ('debug', the debug build type's suffix)."""
+    suffix = ""
+    flavors = _entries(_block(text, "productFlavors") or "")
+    flavor = next((f for f in flavors if re.search(r"isDefault\s*(=|\.set\()\s*true", f[1])), flavors[0] if flavors else None)
+    if flavor:
+        m = re.search(r"applicationIdSuffix" + _ID, flavor[1])
+        suffix += m.group(1) if m else ""
+    debug = dict(_entries(_block(text, "buildTypes") or "")).get("debug", "")
+    m = re.search(r"applicationIdSuffix" + _ID, debug)
+    suffix += m.group(1) if m else ""
+    return ((flavor[0] + "Debug") if flavor else "debug"), suffix
+
+
+def find_app_module(app_dir: Path) -> tuple[str | None, str | None, str]:
+    """The module that applies the Android application plugin, the package of its debug build, and the variant."""
     for build in sorted(app_dir.glob("*/build.gradle*")):
         text = build.read_text(errors="replace")
         if "com.android.application" in text or "android.application" in text:
-            m = re.search(r'applicationId\s*=?\s*"([\w.]+)"', text)
-            return build.parent.name, (m.group(1) if m else None)
-    return None, None
+            m = re.search(r"\bapplicationId" + _ID, text)
+            variant, suffix = default_variant(text)
+            return build.parent.name, (m.group(1) + suffix if m else None), variant
+    return None, None, "debug"
 
 
 def running_avd() -> str | None:
@@ -61,19 +107,19 @@ def running_avd() -> str | None:
 
 
 def detect(app_dir: Path) -> Detected:
-    module, package = find_app_module(app_dir)
+    module, package, variant = find_app_module(app_dir)
     avd = running_avd()
     if not avd:
         avds = emulator.list_avds()
         avd = avds[0] if avds else None
-    return Detected(module, package, avd, compatible_jdk(app_dir))
+    return Detected(module, package, avd, compatible_jdk(app_dir), variant)
 
 
 def write_config(app_dir: Path, d: Detected) -> Path:
     path = app_dir / CONFIG_NAME
     path.write_text(
         "# droid-monkey config. Only what droid-monkey can't discover by itself.\n"
-        f"package: {d.package}\nmodule: {d.module}\nvariant: debug\navd: {d.avd}\n"
+        f"package: {d.package}\nmodule: {d.module}\nvariant: {d.variant}\navd: {d.avd}\n"
         + (f"java_home: {d.java_home}   # this repo's Gradle needs an older JDK\n" if d.java_home else "")
         +
         "# Optional:\n"
