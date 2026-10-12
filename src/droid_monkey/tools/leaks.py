@@ -50,7 +50,7 @@ def _java_env() -> dict:
     """shark-cli is a Java program: use JAVA_HOME if set, else the JDK that ships with Android Studio."""
     import os
     env = dict(os.environ)
-    if not env.get("JAVA_HOME") and not shutil.which("java") and STUDIO_JAVA.exists():
+    if not env.get("JAVA_HOME") and STUDIO_JAVA.exists():  # /usr/bin/java is only a stub without a JDK
         env["JAVA_HOME"] = str(STUDIO_JAVA)
     return env
 
