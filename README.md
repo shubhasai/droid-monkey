@@ -6,6 +6,8 @@ It explores your app on an emulator. Then it hits the app with what real phones 
 
 Built solo by team **Logd** (individual) for **neatHack 2026** ("Build an agent that works, literally").
 
+**▶ Demo video (3 min): [youtu.be/61sALQcY_LY](https://youtu.be/61sALQcY_LY)** · Landing page: [shubhasai.github.io/droid-monkey](https://shubhasai.github.io/droid-monkey/)
+
 > **It found a real bug in Google's official Android sample.** In [`android/architecture-samples`](https://github.com/android/architecture-samples), if you start editing a task and Android kills the app in the background, your edits are gone when you come back. `AddEditTaskViewModel` keeps the title and description only in a `MutableStateFlow`. droid-monkey reproduced the bug on a device, traced it to `AddEditTaskViewModel.kt:59`, and fixed it with a `SavedStateHandle` and a regression test, on the first try.
 
 ---

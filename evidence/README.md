@@ -1,5 +1,7 @@
 # Evidence: how droid-monkey uses neatlogs, Entire and cfo.ai
 
+Demo video, covering each tool's architecture, implementation, runtime, reasoning and result: [youtu.be/61sALQcY_LY](https://youtu.be/61sALQcY_LY)
+
 Each tool has a job in droid-monkey's loop:
 
 - **neatlogs** watches what the agent does. Every run is one trace, with an exact cost on every step.

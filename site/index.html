@@ -278,6 +278,9 @@ figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
 .post-when{font:500 .78rem var(--mono);color:var(--banana-ink)}
 .post-q{color:var(--muted);font-size:.93rem;flex:1}
 .post-go{font-weight:600;color:var(--accent);font-size:.9rem}
+/* demo video */
+.video{position:relative;width:100%;max-width:960px;aspect-ratio:16/9;margin-top:24px;border-radius:var(--radius);overflow:hidden;background:#000;box-shadow:0 18px 50px -24px rgba(0,0,0,.45)}
+.video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .hero-grid>*,.start>*,.show>*,.modes>*,.steps-grid>*,.cols>*,.partners>*{min-width:0}
 .install span{min-width:0}
 footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--muted);font-size:.9rem}
@@ -291,6 +294,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
   <div class="wrap">
     <a class="brand" href="#"><span>(o.o)</span><span>droid-<b>monkey</b></span></a>
     <div class="links">
+      <a class="opt" href="#demo">Demo</a>
       <a class="opt" href="#how">How it works</a>
       <a class="opt" href="#features">Features</a>
       <a class="opt" href="#watch">Watch</a>
@@ -313,7 +317,8 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
         and fixes what breaks, <strong>with your consent</strong>. Every fix is proven by replaying the identical attack
         on a running device, plus a new regression test.</p>
       <div class="cta">
-        <a class="btn primary" href="https://github.com/shubhasai/droid-monkey">View on GitHub</a>
+        <a class="btn primary" href="#demo">▶ Watch the demo</a>
+        <a class="btn" href="https://github.com/shubhasai/droid-monkey">View on GitHub</a>
         <a class="btn" href="https://github.com/shubhasai/droid-monkey/blob/main/SETUP.md">Install guide</a>
       </div>
       <div class="install"><span id="install-cmd">uv tool install git+https://github.com/shubhasai/droid-monkey</span><button class="copy" data-copy="install-cmd">copy</button></div>
@@ -340,6 +345,15 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
     </div>
   </div>
 </header>
+
+<section id="demo">
+  <div class="wrap">
+    <div class="eyebrow">Demo · 3 minutes</div>
+    <h2>Watch droid-monkey break an app and fix it, with proof.</h2>
+    <div class="video"><iframe src="https://www.youtube-nocookie.com/embed/61sALQcY_LY" title="DroidMonkey: a team of AI agents that breaks your Android app and fixes it, with proof | #neatHack" loading="lazy" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>
+    <p class="muted" style="margin-top:12px;font-size:.92rem">Or watch it on YouTube: <a href="https://youtu.be/61sALQcY_LY">youtu.be/61sALQcY_LY</a></p>
+  </div>
+</section>
 
 <section id="modes">
   <div class="wrap">
