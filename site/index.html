@@ -281,6 +281,7 @@ figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
 /* demo video */
 .video{position:relative;width:100%;max-width:960px;aspect-ratio:16/9;margin-top:24px;border-radius:var(--radius);overflow:hidden;background:#000;box-shadow:0 18px 50px -24px rgba(0,0,0,.45)}
 .video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+@media (max-width:860px){#measured-shots{grid-template-columns:minmax(0,1fr)!important}}
 .hero-grid>*,.start>*,.show>*,.modes>*,.steps-grid>*,.cols>*,.partners>*{min-width:0}
 .install span{min-width:0}
 footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--muted);font-size:.9rem}
@@ -684,6 +685,19 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       device and findings suspected from the code alone are labelled differently: Wikipedia's 2 suspected ones, like an
       inverted check in <code>EditSectionActivity.kt</code> that can overwrite an unsaved edit, need an attack to
       reproduce them before they count. Review by Claude Sonnet 5.5.</p>
+  </div>
+</section>
+
+<section id="measured">
+  <div class="wrap">
+    <div class="eyebrow">Measured on the device</div>
+    <h2>Every verdict comes from the device, not a guess.</h2>
+    <p class="lead">Each attack is recorded with a Perfetto trace and memory measurements, read by code. These are
+      droid-monkey's own charts from one attack run on MonkeyMart (<code>attack-20261012-151833</code>).</p>
+    <div class="sp-shots" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-top:28px" id="measured-shots">
+      <figure class="shot"><img src="assets/evidence-memory.webp" alt="Low-memory attack: Perfetto main-thread timeline; after a forced GC, live Activities went from 1 to 7 and the Java heap from 12.9 MB to 16.4 MB; resident memory rising from 172 to 182 MB" width="960" height="515" loading="lazy"><figcaption><b>A memory leak, measured.</b> After the low-memory attack and a forced GC, 6 destroyed screens were still alive (1 → 7 Activities) and the Java heap grew from 12.9 to 16.4 MB. Verdict: leaked.</figcaption></figure>
+      <figure class="shot"><img src="assets/evidence-perfetto.webp" alt="CPU-load attack: Perfetto main-thread timeline under load; frame times: 159 frames within 16 ms, 163 at 17 to 33 ms, 4 at 101 to 700 ms, 0 frozen; resident memory" width="960" height="550" loading="lazy"><figcaption><b>Performance under CPU load, from Perfetto.</b> What the main thread did, second by second, and every frame against Play's limits: 0 frozen frames, so the app survived.</figcaption></figure>
+    </div>
   </div>
 </section>
 
