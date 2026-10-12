@@ -301,6 +301,36 @@ def flow_risks(flows: list[dict], existing: dict) -> list[tuple[dict, dict]]:
     return out
 
 
+def _file(ref: str) -> str:
+    return ref.split(":", 1)[0].strip()
+
+
+def flow_reach(flow: dict, smap) -> list[str]:
+    """The explored screens behind a flow: screens whose source files the flow's code references, and whose path
+    replays. Empty when exploration never reached the flow (a login wall, an editor, a flow it did not try)."""
+    code = {_file(c) for c in (flow.get("code") or []) if isinstance(c, str)}
+    code |= {_file(r.get("code", "")) for r in flow.get("risks", []) if isinstance(r.get("code"), str)}
+    broken = {u.get("screen") for u in getattr(smap, "unreached", []) or []
+              if str(u.get("reason", "")).startswith("recorded path does not replay")}
+    return [sid for sid, info in smap.screens.items() if sid not in broken and code & set(info.files or [])]
+
+
+def rank_by_reach(todo: list[tuple[dict, dict]], smap) -> tuple[list[tuple[dict, dict]], list[str]]:
+    """Risks on flows the explorer reached, one per flow in turn (so a limit spreads over flows instead of using
+    them all on the first), most-reached flows first. Returns them and the names of the unreached flows."""
+    by_flow: dict[str, list] = {}
+    reach: dict[str, int] = {}
+    for flow, risk in todo:
+        name = flow.get("name", "?")
+        by_flow.setdefault(name, []).append((flow, risk))
+        reach.setdefault(name, len(flow_reach(flow, smap)))
+    order = sorted((n for n in by_flow if reach[n]), key=lambda n: -reach[n])
+    out = []
+    for i in range(max((len(v) for v in by_flow.values()), default=0)):
+        out += [by_flow[n][i] for n in order if i < len(by_flow[n])]
+    return out, [n for n in by_flow if not reach[n]]
+
+
 def flow_goal(flow: dict, risk: dict) -> str:
     steps = "; ".join(flow.get("steps", []))
     return (f"Design one attack for a risk the code analysis found on the user flow '{flow.get('name')}' "

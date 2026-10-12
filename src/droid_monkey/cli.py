@@ -611,10 +611,11 @@ def attacks_suggest(app_dir: Path, count: int, try_on_device: bool) -> None:
 @APP_DIR
 @click.option("--max", "limit", default=6, show_default=True, help="Design at most this many flow attacks.")
 @click.option("--try/--no-try", "try_on_device", default=True, help="Try each spec on the emulator before saving.")
-def attacks_from_flows(app_dir: Path, limit: int, try_on_device: bool) -> None:
+@click.option("--all-flows", is_flag=True, help="Also design attacks for flows the explorer did not reach.")
+def attacks_from_flows(app_dir: Path, limit: int, try_on_device: bool, all_flows: bool) -> None:
     """Turn the user flows and risks from `analyze` into attacks: one validated, tried spec per risk, walking that
     flow and injecting that fault at the moment the analysis named."""
-    from .designer import Designer, flow_goal, flow_risks, load_flows
+    from .designer import Designer, flow_goal, flow_risks, load_flows, rank_by_reach
     ctx = _context(app_dir, time.strftime("flows-%Y%m%d-%H%M%S"))
     theme.banner("attacks from user flows")
     smap, prof, saved, known = _load_app(ctx)
@@ -622,8 +623,15 @@ def attacks_from_flows(app_dir: Path, limit: int, try_on_device: bool) -> None:
     if not flows:
         raise click.ClickException("no flows yet: run `droid-monkey analyze` first")
     todo = flow_risks(flows, saved)
+    uncovered = len(todo)
+    if not all_flows:
+        todo, unreached = rank_by_reach(todo, smap)
+        if unreached:
+            theme.note(f"skipping flows the explorer did not reach: {', '.join(unreached)} "
+                       "(`--all-flows` designs them anyway)")
     theme.kv("flows", f"{len(flows)} flows, {sum(len(f.get('risks', [])) for f in flows)} risks, "
-                      f"{len(todo)} not covered yet" + (f"; designing {limit}" if len(todo) > limit else ""))
+                      f"{uncovered} not covered yet, {len(todo)} on reached flows"
+             + (f"; designing {limit}" if len(todo) > limit else ""))
     total_in = total_out = 0
     rows = []
     for flow, risk in todo[:limit]:
