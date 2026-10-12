@@ -1,0 +1,41 @@
+<bash-input>git push</bash-input><bash-stdout>[entire] Pushing 1 checkpoint ref(s) to origin....... done
+Enumerating objects: 12, done.
+Counting objects: 100% (12/12), done.
+Delta compression using up to 10 threads
+Compressing objects: 100% (6/6), done.
+Writing objects: 100% (7/7), 9.28 KiB | 9.28 MiB/s, done.
+Total 7 (delta 4), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (4/4), completed with 4 local objects.
+To github.com:shubhasai/droid-monkey.git
+   5da4250..21fea13  main -&gt; main</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+look for changes commit and push
+
+---
+
+why no check point
+
+---
+
+<bash-input>entire session attach 4f7eace8-8050-4fcd-9fe1-ff077b3f28b9 --force</bash-input><bash-stdout>Session 4f7eace8-8050-4fcd-9fe1-ff077b3f28b9 already has checkpoint 01M4PH11GW6HZK0FP5YV9HZV9P
+
+Last commit: 38570be Coverage, flow attacks, ANRs and a run receipt
+Amended commit 38570be with Entire-Checkpoint: 01M4PH11GW6HZK0FP5YV9HZV9P</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+<bash-input>git push --force-with-lease</bash-input><bash-stdout>Enumerating objects: 46, done.
+Counting objects: 100% (46/46), done.
+Delta compression using up to 10 threads
+Compressing objects: 100% (23/23), done.
+Writing objects: 100% (24/24), 11.29 KiB | 11.29 MiB/s, done.
+Total 24 (delta 21), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (21/21), completed with 21 local objects.
+To github.com:shubhasai/droid-monkey.git
+ + 38570be...a563643 main -&gt; main (forced update)</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+add the anr monkey face
