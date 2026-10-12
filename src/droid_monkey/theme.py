@@ -190,6 +190,9 @@ def monkey_says(outcome: str, title: str, lines: list[str], color: str | None = 
     art = FACES.get(outcome, FACES["worried"])
     color = color or BADGES.get(outcome, ("", "white"))[1]
     inner = max(20, min(width() - 24, max([_visible(title)] + [_visible(l) for l in lines]) + 2))
+    if _visible(title) > inner:  # a long plain title wraps instead of breaking the bubble
+        head, *more = textwrap.wrap(title, inner) if _visible(title) == len(title) else [title]
+        title, lines = head, more + list(lines)
     text = [style(title, fg=color, bold=True)]
     for l in lines:
         for w in (textwrap.wrap(l, inner - 2, subsequent_indent="  ") if _visible(l) == len(l) else [l]) or [""]:

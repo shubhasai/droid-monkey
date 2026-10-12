@@ -30,7 +30,7 @@ HIDDEN = {"dashboard"}                      # not offered from the dashboard
 PUBLISHES = {"pr"}                          # acts outside this machine: the page asks for an explicit confirmation
 GROUPS = [("Set up", ["init", "analyze"]), ("Explore", ["explore"]),
           ("Attack", ["attack", "attacks from-flows", "attacks suggest", "attacks new", "attacks list", "attacks show"]),
-          ("Fix", ["run"]), ("UX", ["ux"]), ("Reports", ["report", "compare", "pr"])]
+          ("Hunt", ["hunt"]), ("Fix", ["run"]), ("UX", ["ux"]), ("Reports", ["report", "compare", "pr"])]
 PROMPT = re.compile(r"(Fix it\?|Make this change\?|Press Enter|\[y\]es / \[n\]o|\(y/n\)|\[Y/n\]|\[y/N\])[^\n]*$", re.I)
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 

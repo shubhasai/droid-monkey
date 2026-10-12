@@ -56,7 +56,7 @@ def version(root: Path) -> str:
     return h.hexdigest()[:16]
 
 
-RUN_KINDS = {"attack": "attack", "run": "run", "flows": "flow attacks", "explore": "explore", "ux": "UX",
+RUN_KINDS = {"attack": "attack", "run": "run", "flows": "flow attacks", "explore": "explore", "ux": "UX", "hunt": "hunt",
              "visuals": "run"}
 
 
@@ -81,6 +81,13 @@ def run_info(run: Path) -> dict:
     info = {"id": run.name, "kind": _kind(run.name), "when": _when(run.name, run), "attacks": 0, "broke": 0,
             "fixed": 0, "outcomes": [], "cost": None, "live": False, "dashboard": (run / "dashboard.html").exists()}
     summary = _json(run / "summary.json")
+    hunted = _json(run / "issues.json")
+    if hunted and not summary:  # a hunt: issues in normal use, no attacks
+        issues = hunted.get("issues", [])
+        info.update(attacks=hunted.get("journeys", 0), broke=len(issues), hunt=True,
+                    outcomes=[(x.get("title"), x.get("severity")) for x in issues],
+                    cost=(hunted.get("usage") or {}).get("cost_usd") or None)
+        return info
     if summary:
         outs = summary.get("outcomes", [])
         info.update(attacks=len(outs), fixed=sum(1 for o in outs if o.get("status") == "fixed"),
@@ -204,7 +211,7 @@ def thumbnail(path: Path, width: int = 360) -> bytes:
 
 def _chip(outcome: str | None) -> str:
     tone = {"survived": "ok", "fixed": "ok", "skipped": "idle", "declined": "idle", "unreachable": "idle",
-            "harness_error": "idle"}.get(outcome or "", "bad")
+            "harness_error": "idle", "low": "idle", "medium": "warn"}.get(outcome or "", "bad")
     return f'<span class="chip c-{tone}">{esc(str(outcome or "?").replace("_", " "))}</span>'
 
 
@@ -217,7 +224,8 @@ def _stat(label: str, num, sub: str = "", href: str = "") -> str:
 def _runs_table(rs: list[dict]) -> str:
     rows = []
     for r in rs:
-        counts = f"{r['attacks']} attacks · {r['broke']} broke" + (f" · {r['fixed']} fixed" if r["fixed"] else "")
+        counts = (f"{r['attacks']} journeys · {r['broke']} issues" if r.get("hunt") else
+                  f"{r['attacks']} attacks · {r['broke']} broke" + (f" · {r['fixed']} fixed" if r["fixed"] else ""))
         chips = "".join(_chip(o) for _, o in r["outcomes"][:8]) + ("…" if len(r["outcomes"]) > 8 else "")
         live = '<span class="livebadge">running</span>' if r["live"] else ""
         rows.append(f'<tr><td><a href="/run/{quote(r["id"])}"><code>{esc(r["id"])}</code></a>{live}</td>'
@@ -307,6 +315,8 @@ def page_run(root: Path, app: Path, run_id: str) -> str:
             + (' · <span class="livebadge">running</span>' if info["live"] else "") + '</p></header>')
     extras = "".join(f'<a class="btn" href="{_f(f"runs/{run_id}/{n}")}">{n}</a>'
                      for n in ("receipt.md", "log.txt", "summary.json", "results.json") if (run / n).exists())
+    if (run / "issues.json").exists():
+        return head + _hunt_body(run, root)
     if (run / "dashboard.html").exists():
         return head + (f'<p class="actions">{extras}<a class="btn" href="{_f(f"runs/{run_id}/dashboard.html")}" '
                        f'target="_blank">Open full screen</a></p>' if True else "") \
@@ -316,6 +326,34 @@ def page_run(root: Path, app: Path, run_id: str) -> str:
     partial = "".join(f'<li><code>{esc(d.name)}</code>: no verdict yet ({len(list(d.iterdir()))} files)</li>' for d in rest)
     return head + (f'<p class="actions">{extras}</p>' if extras else "") + (cards or "") + (
         f'<section class="panel"><h2>Without a verdict</h2><ul>{partial}</ul></section>' if partial else "")
+
+
+def _hunt_body(run: Path, root: Path) -> str:
+    """A hunt's issues: what, where, the steps from launch, and the screenshot of the step where it showed."""
+    data = _json(run / "issues.json") or {}
+    cards = []
+    for x in data.get("issues", []):
+        shots = [e for e in x.get("evidence", []) if e.endswith(".png")]
+        quotes = [e for e in x.get("evidence", []) if not e.endswith((".png", ".xml", ".txt"))]
+        logs = [e for e in x.get("evidence", []) if e.endswith(".txt")]
+        rel = run.relative_to(root).as_posix()
+        steps = "".join(f"<li><code>{esc(s)}</code></li>" for s in x.get("steps", [])) or "<li>on launch</li>"
+        img = "".join(f'<figure><img src="{_t(rel + "/" + s)}" data-full="{_f(rel + "/" + s)}" alt="step" loading="lazy">'
+                      f'<figcaption>step {x.get("step", "?")}</figcaption></figure>' for s in shots[:1])
+        cards.append(f"""<article class="ev"><div class="ev-head"><h3>{esc(x.get('title', ''))}</h3>{_chip(x.get('severity'))}
+<span class="hint">{esc(x.get('kind', ''))} · found by the {esc(x.get('detector', ''))}{' · screen ' + esc(x['screen']) if x.get('screen') else ''}</span></div>
+<p>{esc(x.get('detail', ''))}</p>{('<ul class="notes">' + ''.join(f'<li><code>{esc(q)}</code></li>' for q in quotes[:6]) + '</ul>') if quotes else ''}
+<div class="two"><div><h3>Steps from launch</h3><ol>{steps}</ol></div><div class="shots">{img}</div></div>
+{('<p class="files">' + ' '.join(f'<a href="{_f(rel + "/" + l)}"><code>{esc(l.rsplit("/", 1)[-1])}</code></a>' for l in logs[:2]) + '</p>') if logs else ''}</article>""")
+    notes = "".join(f"<li>{esc(n)}</li>" for n in data.get("notes", []))
+    u = data.get("usage") or {}
+    meta = (f'<p class="actions"><a class="btn" href="{_f(run.relative_to(root).as_posix() + "/HUNT.md")}">HUNT.md</a>'
+            f'<span class="hint">{data.get("steps", 0)} steps on {data.get("journeys", 0)} journeys in '
+            f'{data.get("seconds", 0):.0f}s, no fault injected'
+            + (f' · model ${u.get("cost_usd", 0):.3f}, {u.get("dropped_unquoted", 0)} unquoted claims dropped'
+               if u.get("input_tokens") else "") + '</span></p>')
+    return meta + ("".join(cards) or '<section class="panel"><h2>No issues in normal use</h2></section>') + (
+        f'<section class="panel"><h2>Notes</h2><ul>{notes}</ul></section>' if notes else "")
 
 
 def page_screens(root: Path, app: Path) -> str:

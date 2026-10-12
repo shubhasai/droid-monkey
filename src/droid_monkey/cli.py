@@ -25,6 +25,26 @@ from .tools.device import Device
 
 BUILTIN = specs_mod.builtin_templates()
 
+def _current_build(ctx, build: bool | None) -> str | None:
+    """Make sure the installed app is built from this source: by default build and install when it is not
+    (build=None), always with build=True, never with build=False. Returns the mismatch left, if any."""
+    from . import provenance
+    mismatch = None if build else provenance.check(ctx.cfg.app_dir, ctx.adb, ctx.cfg.package)
+    if build is None and mismatch:
+        theme.note(f"building first: {mismatch}")
+        build, mismatch = True, None
+    elif mismatch:
+        theme.warn(f"{mismatch}; results describe the installed build, not this source")
+    if build:
+        with theme.working("gradle is growing the banana tree..."):
+            res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
+        if not res.ok or not res.apk:
+            raise click.ClickException(f"build failed:\n{res.log_tail}")
+        gradle.install(ctx.adb, res.apk, package=ctx.cfg.package, source_dir=ctx.cfg.app_dir)
+        theme.ok(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
+    return mismatch
+
+
 def _interactive() -> bool:
     """Someone can answer prompts: a terminal, or the dashboard, which runs commands with a pipe it answers from
     the page (DROID_MONKEY_INTERACTIVE=1)."""
@@ -399,23 +419,9 @@ def attack(name: str, app_dir: Path, target: str | None, action: str | None, re_
     best = None
     run_id = run_id or time.strftime("attack-%Y%m%d-%H%M%S")
     ctx = _context(app_dir, run_id)
-    from . import provenance
-    mismatch = None if build else provenance.check(ctx.cfg.app_dir, ctx.adb, ctx.cfg.package)
-    if build is None and mismatch:
-        theme.note(f"building first: {mismatch}")
-        build, mismatch = True, None
-    elif mismatch:
-        theme.warn(f"{mismatch}; results describe the installed build, not this source")
-        if diagnose:
-            theme.warn("--diagnose skipped: it reads this source, which is not what is installed")
-            diagnose = False
-    if build:
-        with theme.working("gradle is growing the banana tree..."):
-            res = gradle.build(ctx.cfg.app_dir, ctx.cfg.module, ctx.cfg.variant, java_home=ctx.cfg.java_home)
-        if not res.ok or not res.apk:
-            raise click.ClickException(f"build failed:\n{res.log_tail}")
-        gradle.install(ctx.adb, res.apk, package=ctx.cfg.package, source_dir=ctx.cfg.app_dir)
-        theme.ok(f"built and installed {res.apk.name} in {res.seconds:.0f}s")
+    if _current_build(ctx, build) and diagnose:
+        theme.warn("--diagnose skipped: it reads this source, which is not what is installed")
+        diagnose = False
     smap, prof, saved, known = _load_app(ctx, re_explore)
     candidates = scenarios_mod.generate(smap)
 
@@ -894,3 +900,58 @@ def dashboard(app_dir: Path, port: int, open_browser: bool) -> None:
         raise click.ClickException(f"no .droid-monkey folder in {app_dir.resolve()}: run `droid-monkey init` there first")
     live.serve(app_dir, port=port, open_browser=open_browser)
 
+
+
+HUNT_FACE = {"high": ("crashed", "red"), "medium": ("worried", "yellow"), "low": ("unreachable", "cyan")}
+
+
+@main.command()
+@APP_DIR
+@click.option("--model/--no-model", "use_model", default=True,
+              help="Also have the model read each journey's screenshots for logic bugs (default). --no-model runs "
+                   "only the code checks: logs and screens, no API cost.")
+@click.option("--run-id", default=None, help="Evidence folder name under .droid-monkey/runs/.")
+@click.option("--build/--no-build", default=None, help="Build and install the app first. Default: only when the "
+              "installed app was not built from the current source.")
+def hunt(app_dir: Path, use_model: bool, run_id: str | None, build: bool | None) -> None:
+    """Find bugs in normal use, with no fault injected: walk every recorded path like a user and check the app's
+    logs (crashes, swallowed exceptions, jank), every screen (null/NaN/placeholders, negative money, blank screens)
+    and, with a model, each journey's numbers and messages. Changes no code."""
+    from . import hunt as hunt_mod
+    from .designer import load_flows
+    from .tracing import load_keys
+    load_keys()
+    theme.banner("hunt")
+    ctx = _context(app_dir, run_id or time.strftime("hunt-%Y%m%d-%H%M%S"))
+    if not _map_path(ctx).exists():
+        raise click.ClickException("no screen map yet: run `droid-monkey explore` first")
+    _current_build(ctx, build)
+    smap = ScreenMap.load(_map_path(ctx))
+    analysis_md = paths.data_dir(ctx.cfg.app_dir) / "ANALYSIS.md"
+    context = (analysis_md.read_text()[:4000] if analysis_md.exists() else "") + "\n\nUser flows:\n" + json.dumps(
+        [{k: f.get(k) for k in ("name", "description", "steps")} for f in load_flows(ctx.cfg.app_dir)], indent=1)
+    theme.header("hunting for bugs in normal use", "(o_O)")
+    theme.kv("journeys", f"{len(hunt_mod.journeys(smap))} (every mapped screen), no fault injected")
+    theme.kv("checks", "app logs, every screen" + (f", journey review ({ctx.cfg.llm.model})" if use_model else ""))
+    with theme.working("the monkey is using your app like a customer..."):
+        res = hunt_mod.hunt(ctx, smap, context=context, use_model=use_model, echo=lambda *_: None)
+    for note in res.notes:
+        theme.warn(note)
+    for x in res.issues:
+        face, color = HUNT_FACE.get(x.severity, ("worried", "yellow"))
+        lines = [x.detail] + [e for e in x.evidence if not e.endswith((".png", ".xml", ".txt"))][:4]
+        lines.append(f"{x.kind} · {x.detector} · step {x.step}" + (f" · screen {x.screen}" if x.screen else ""))
+        theme.monkey_says(face, f"{x.severity.upper()}  {x.title}", lines, color=color)
+    if res.issues:
+        high = sum(1 for x in res.issues if x.severity == "high")
+        theme.score_monkey(0 if high else 50, f"{len(res.issues)} ISSUES IN NORMAL USE",
+                           [f"{high} high, found on {res.steps} steps in {res.seconds:.0f}s, no fault injected"])
+    else:
+        theme.monkey_says("survived", "NO ISSUES IN NORMAL USE",
+                          [f"{res.steps} steps on {res.journeys} journeys, logs and screens clean"])
+    click.echo("")
+    if use_model and res.usage.get("input_tokens"):
+        theme.kv("model", f"{res.usage['input_tokens']:,} in / {res.usage['output_tokens']:,} out tokens, "
+                          f"${res.usage['cost_usd']:.3f}; {res.usage['dropped_unquoted']} unquoted claims dropped")
+    theme.path_line("report", res.out_dir / "HUNT.md")
+    theme.path_line("evidence", res.out_dir)
