@@ -2,7 +2,7 @@
 
 The low_memory attack counts live Activities after a forced GC; that says a screen leaked, not what holds it. For the
 "what", droid-monkey dumps the app's heap and runs Shark, LeakCanary's own heap analyser, through its command line
-(`shark-cli`, `brew install leakcanary-shark`). It works for any debuggable build, whether or not the app ships
+(`shark-cli`: `brew install leakcanary-shark`, or its release zip unpacked in ~/.droid-monkey/tools). It works for any debuggable build, whether or not the app ships
 LeakCanary. Its leak trace names every reference from a GC root to the leaked Activity and marks the suspects
 (`~~~`), which is what the diagnoser needs to name the cause instead of guessing it.
 
@@ -33,8 +33,26 @@ class LeakReport:
     note: str = ""
 
 
+TOOLS_DIR = Path.home() / ".droid-monkey" / "tools"
+STUDIO_JAVA = Path("/Applications/Android Studio.app/Contents/jbr/Contents/Home")
+
+
 def shark_cli() -> str | None:
-    return shutil.which("shark-cli")
+    """`shark-cli` on PATH (Homebrew), else the release unpacked under ~/.droid-monkey/tools."""
+    found = shutil.which("shark-cli")
+    if found:
+        return found
+    local = sorted(TOOLS_DIR.glob("shark-cli*/bin/shark-cli"))
+    return str(local[-1]) if local else None
+
+
+def _java_env() -> dict:
+    """shark-cli is a Java program: use JAVA_HOME if set, else the JDK that ships with Android Studio."""
+    import os
+    env = dict(os.environ)
+    if not env.get("JAVA_HOME") and not shutil.which("java") and STUDIO_JAVA.exists():
+        env["JAVA_HOME"] = str(STUDIO_JAVA)
+    return env
 
 
 def destroyed(adb: Adb) -> list[str]:
@@ -104,7 +122,7 @@ def analyse(adb: Adb, package: str, out_dir: Path, timeout: float = 300) -> Leak
         return rep
     try:
         proc = subprocess.run([cli, "--hprof", str(hprof), "analyze"], capture_output=True, text=True,
-                              timeout=timeout, stdin=subprocess.DEVNULL)
+                              timeout=timeout, stdin=subprocess.DEVNULL, env=_java_env())
     except subprocess.TimeoutExpired:
         rep.note = f"Shark did not finish within {timeout:.0f}s; the heap dump is saved"
         return rep
