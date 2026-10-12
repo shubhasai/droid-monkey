@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>droid-monkey</title>
+<meta name="description" content="An agent that attacks any Android app with real-world faults, hunts for bugs in normal use, and fixes what breaks, with your consent, proving every fix on a running device.">
+<meta property="og:title" content="droid-monkey">
+<meta property="og:description" content="Attacks your Android app with what real phones do to it, finds what breaks, and proves every fix on a running device.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐒</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfaf6; --surface:#ffffff; --sunken:#f2f0e8; --fg:#1b1f17; --muted:#5d6457; --line:#e1ddd0;
+  --accent:#2f6b3f; --accent-soft:#e3efe2; --banana:#f2c230; --banana-ink:#7a5a00; --bad:#b4342b; --bad-soft:#f9e4e1;
+  --term:#151a14; --hl:#f7dd7d; --term-fg:#dfe6d8; --term-dim:#8a957f; --term-yellow:#f2c230; --term-red:#ff7b6b; --term-green:#7fd38b; --term-cyan:#7cc7d6;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --radius:14px; --wrap:1080px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#10130f; --surface:#171b16; --sunken:#1d221b; --fg:#e7ebe2; --muted:#9aa492; --line:#2b3228;
+    --accent:#86c98f; --accent-soft:#1d2b1f; --banana:#f2c230; --banana-ink:#f2c230; --bad:#ff8a7d; --bad-soft:#3a1f1c;
+    --term:#0b0e0a; --hl:rgba(242,194,48,.28);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10130f; --surface:#171b16; --sunken:#1d221b; --fg:#e7ebe2; --muted:#9aa492; --line:#2b3228;
+  --accent:#86c98f; --accent-soft:#1d2b1f; --banana:#f2c230; --banana-ink:#f2c230; --bad:#ff8a7d; --bad-soft:#3a1f1c;
+  --term:#0b0e0a; --hl:rgba(242,194,48,.28);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
+a{color:var(--accent)}
+code,pre{font-family:var(--mono)}
+code{font-size:.92em;background:var(--sunken);padding:.1em .35em;border-radius:5px}
+.wrap{max-width:var(--wrap);margin:0 auto;padding:0 20px}
+section{padding:72px 0;border-top:1px solid var(--line)}
+h1,h2,h3{line-height:1.2;margin:0 0 .5em;letter-spacing:-.01em}
+h2{font-size:clamp(1.6rem,3.2vw,2.2rem)}
+h3{font-size:1.1rem}
+.eyebrow{font:600 .78rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--banana-ink);margin-bottom:14px}
+.lead{font-size:1.12rem;color:var(--muted);max-width:66ch}
+.muted{color:var(--muted)}
+
+/* nav */
+nav{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:20px;height:58px}
+.brand{font:600 1rem var(--mono);color:var(--fg);text-decoration:none;display:flex;gap:8px;align-items:center}
+.brand b{color:var(--banana-ink)}
+nav .links{margin-left:auto;display:flex;gap:18px;align-items:center}
+nav .links a{color:var(--muted);text-decoration:none;font-size:.92rem}
+nav .links a:hover{color:var(--fg)}
+@media (max-width:640px){nav .links a.opt{display:none}}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--fg);background:var(--surface)}
+.btn.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.btn:hover{transform:translateY(-1px)}
+
+/* hero */
+.hero{padding:64px 0 56px;border-top:0}
+.hero h1{font-size:clamp(2.1rem,5.4vw,3.6rem);max-width:18ch}
+.hero h1 em{font-style:normal;background:linear-gradient(transparent 64%,var(--hl) 0)}
+.hero .lead{margin:18px 0 26px}
+.cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.install{display:flex;align-items:center;gap:10px;margin-top:22px;max-width:100%;background:var(--term);color:var(--term-fg);border-radius:10px;padding:10px 12px 10px 16px;font:14px var(--mono);overflow:hidden}
+.install span{white-space:nowrap;overflow-x:auto;scrollbar-width:none}
+.install span::before{content:"$ ";color:var(--term-dim)}
+.copy{margin-left:auto;flex:none;font:600 12px var(--mono);background:#2a3127;color:var(--term-fg);border:0;border-radius:7px;padding:6px 10px;cursor:pointer}
+.hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center}
+@media (max-width:1040px){.hero-grid{grid-template-columns:1fr}}
+
+/* terminal */
+.term{background:var(--term);color:var(--term-fg);border-radius:var(--radius);padding:0;overflow:hidden;box-shadow:0 18px 50px -24px rgba(0,0,0,.45)}
+.term .bar{display:flex;gap:6px;padding:11px 14px;background:rgba(255,255,255,.04)}
+.term .bar i{width:10px;height:10px;border-radius:50%;background:#3a4237}
+.term .bar small{margin-left:10px;color:var(--term-dim);font:12px var(--mono)}
+.term pre{margin:0;padding:16px 18px 20px;font-size:12.5px;line-height:1.45;overflow-x:auto;white-space:pre}
+.y{color:var(--term-yellow)} .r{color:var(--term-red)} .g{color:var(--term-green)} .c{color:var(--term-cyan)} .d{color:var(--term-dim)} .b{font-weight:600}
+
+/* two modes */
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:34px}
+@media (max-width:760px){.modes{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:26px}
+.card .face{font:600 1.05rem var(--mono);color:var(--banana-ink);margin-bottom:10px}
+.card ul{margin:12px 0 0;padding-left:18px;color:var(--muted)}
+.card li{margin:4px 0}
+.card .cmd{display:inline-block;margin-top:14px;font:13px var(--mono);background:var(--sunken);padding:5px 10px;border-radius:7px}
+
+/* loop */
+.loop{display:flex;flex-wrap:wrap;gap:8px;margin:30px 0 8px;align-items:center}
+.step{font:500 .9rem var(--mono);padding:9px 13px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
+.step.you{background:var(--banana);border-color:var(--banana);color:#2a2100;font-weight:600}
+.step.code{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+.arrow{color:var(--muted);font-family:var(--mono)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.86rem;color:var(--muted);margin-top:10px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px;background:var(--sw)}
+.steps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:30px}
+@media (max-width:860px){.steps-grid{grid-template-columns:1fr}}
+.steps-grid .card{padding:20px}
+.steps-grid h3{font-family:var(--mono);font-size:.98rem}
+.steps-grid p{margin:0;color:var(--muted);font-size:.95rem}
+
+/* hunt showcase */
+.show{display:grid;grid-template-columns:auto auto 1fr;gap:26px;align-items:start;margin-top:34px}
+@media (max-width:1100px){.show{grid-template-columns:auto auto;justify-content:start}.show>div:last-child{grid-column:1/-1}}
+@media (max-width:520px){.show{grid-template-columns:1fr}}
+figure{margin:0}
+.phone{position:relative;width:min(270px,100%);border-radius:22px;overflow:hidden;border:8px solid #1d211c;background:#fff;box-shadow:0 14px 40px -22px rgba(0,0,0,.5)}
+.phone img{display:block;width:100%;height:auto}
+.hl{position:absolute;border:2.5px solid var(--bad);border-radius:6px;background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.hl b{position:absolute;right:-11px;top:-11px;width:22px;height:22px;border-radius:50%;background:var(--bad);color:#fff;font:700 12px/22px var(--sans);text-align:center}
+figcaption{font-size:.86rem;color:var(--muted);margin-top:10px;max-width:270px}
+.found{list-style:none;padding:0;margin:26px 0 0;display:grid;gap:10px}
+.found li{display:grid;grid-template-columns:26px 1fr;gap:10px;align-items:start;font-size:.95rem}
+.found li b{width:22px;height:22px;border-radius:50%;background:var(--bad);color:#fff;font:700 12px/22px var(--sans);text-align:center}
+.found .by{font:12px var(--mono);color:var(--muted)}
+
+/* attacks table */
+.tbl{width:100%;border-collapse:collapse;margin-top:26px;font-size:.95rem}
+.tbl th,.tbl td{text-align:left;padding:12px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl th{font:600 .78rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.tbl td:first-child{font-family:var(--mono);font-weight:500;white-space:nowrap}
+.pill{display:inline-block;font:500 .78rem var(--mono);padding:2px 8px;border-radius:999px;background:var(--bad-soft);color:var(--bad);margin:2px 4px 2px 0}
+.scroll{overflow-x:auto}
+@media (max-width:640px){.tbl thead{display:none}.tbl tr{display:block;padding:12px 0;border-bottom:1px solid var(--line)}.tbl td{display:block;border:0;padding:2px 0}.tbl td:first-child{font-size:1rem}}
+
+/* proof */
+.callout{border-left:4px solid var(--banana);background:var(--surface);border-radius:0 var(--radius) var(--radius) 0;padding:22px 26px;margin-top:26px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:26px}
+@media (max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+.stat .n{font:600 1.9rem/1 var(--sans);letter-spacing:-.02em}
+.stat .n small{font-size:1rem;color:var(--muted);font-weight:500}
+.stat .l{font-size:.88rem;color:var(--muted);margin-top:8px}
+.vs{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.vs s{color:var(--muted);font-size:1.05rem;font-weight:500}
+
+/* safety & partners */
+.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
+@media (max-width:860px){.cols{grid-template-columns:1fr}}
+.cols .card p{margin:0;color:var(--muted);font-size:.95rem}
+.partners{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
+@media (max-width:860px){.partners{grid-template-columns:1fr}}
+.partners .card h3{display:flex;justify-content:space-between;align-items:baseline}
+.partners .card h3 small{font:500 .75rem var(--mono);color:var(--muted)}
+.partners p{margin:0;color:var(--muted);font-size:.95rem}
+.stack{margin-top:22px;font:13px var(--mono);color:var(--muted)}
+
+/* start */
+.start{display:grid;grid-template-columns:1fr 1fr;gap:36px;align-items:start}
+@media (max-width:860px){.start{grid-template-columns:1fr}}
+/* videos */
+.watch{display:grid;gap:44px;margin-top:34px}
+.story{display:grid;grid-template-columns:230px 1fr;gap:28px;align-items:start}
+.story.pair{grid-template-columns:230px 230px 1fr}
+@media (max-width:900px){.story,.story.pair{grid-template-columns:repeat(2,minmax(0,230px));justify-content:start}.story>.notes{grid-column:1/-1}}
+@media (max-width:520px){.story,.story.pair{grid-template-columns:minmax(0,1fr)}.clip{margin:0 auto}}
+.story>*{min-width:0}
+.clip{width:100%;max-width:230px}
+.clip video{display:block;width:100%;aspect-ratio:360/808;border-radius:18px;border:7px solid #1d211c;background:#1d211c;object-fit:cover}
+.clip .tag{display:inline-block;margin-top:10px;font:600 .78rem var(--mono);padding:3px 9px;border-radius:999px}
+.tag.bad{background:var(--bad-soft);color:var(--bad)} .tag.ok{background:var(--accent-soft);color:var(--accent)}
+.clip p{margin:6px 0 0;font-size:.86rem;color:var(--muted)}
+.notes h3{margin-top:4px}
+.notes p{color:var(--muted);margin:0 0 12px}
+.timeline{list-style:none;margin:14px 0 0;padding:0;border-left:2px solid var(--line)}
+.timeline li{position:relative;padding:0 0 12px 18px;font-size:.93rem}
+.timeline li::before{content:"";position:absolute;left:-6px;top:7px;width:10px;height:10px;border-radius:50%;background:var(--line)}
+.timeline li.bad::before{background:var(--bad)} .timeline li.ok::before{background:var(--accent)} .timeline li.you::before{background:var(--banana)}
+.timeline time{font:12px var(--mono);color:var(--muted);margin-right:6px}
+.spec{background:var(--term);color:var(--term-fg);border-radius:10px;padding:14px 16px;font:12.5px/1.5 var(--mono);overflow-x:auto;margin:12px 0 0;white-space:pre}
+.spec .k{color:var(--term-cyan)} .spec .v{color:var(--term-yellow)} .spec .cm{color:var(--term-dim)}
+.hero-grid>*,.start>*,.show>*,.modes>*,.steps-grid>*,.cols>*,.partners>*{min-width:0}
+.install span{min-width:0}
+footer{border-top:1px solid var(--line);padding:30px 0 44px;color:var(--muted);font-size:.9rem}
+footer .wrap{display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between}
+footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#"><span>(o.o)</span><span>droid-<b>monkey</b></span></a>
+    <div class="links">
+      <a class="opt" href="#how">How it works</a>
+      <a class="opt" href="#watch">Watch</a>
+      <a class="opt" href="#hunt">Hunt</a>
+      <a class="opt" href="#attacks">Attacks</a>
+      <a class="opt" href="#proof">Results</a>
+      <a href="https://github.com/shubhasai/droid-monkey">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow">An agent for Android apps · neatHack 2026</div>
+      <h1>Your app works on your desk. <em>Does it survive a real phone?</em></h1>
+      <p class="lead">droid-monkey attacks any Android app with what real phones do to it, hunts for bugs in normal use,
+        and fixes what breaks, <strong>with your consent</strong>. Every fix is proven by replaying the identical attack
+        on a running device, plus a new regression test.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/shubhasai/droid-monkey">View on GitHub</a>
+        <a class="btn" href="https://github.com/shubhasai/droid-monkey/blob/main/SETUP.md">Install guide</a>
+      </div>
+      <div class="install"><span id="install-cmd">uv tool install git+https://github.com/shubhasai/droid-monkey</span><button class="copy" data-copy="install-cmd">copy</button></div>
+    </div>
+    <div class="term" aria-label="droid-monkey terminal output">
+      <div class="bar"><i></i><i></i><i></i><small>droid-monkey run</small></div>
+<pre><span class="y b">(>.<)==[ attack 1/4: process_death ]=========</span>
+
+<span class="y b">    see no evil</span>
+<span class="y b">       .-"-.</span>
+<span class="y b">     _/.-.-.\_</span>      <span class="d">.--------------------------------.</span>
+<span class="y b">    ( ( ### ) )</span>    <span class="d"><</span>  <span class="y b">LOST STATE  process_death</span>     <span class="d">|</span>
+<span class="y b">     |/  "  \|</span>      <span class="d">|</span> 6 of 6 filled fields emptied  <span class="d">|</span>
+<span class="y b">      \ .-. /</span>       <span class="d">'--------------------------------'</span>
+<span class="y b">       `---`</span>
+    <span class="c b">o</span>   <span class="c b">diagnose</span>     CheckoutViewModel.kt:14 keeps the
+                     fields in mutableStateOf, no SavedStateHandle
+    <span class="y b">!</span>   <span class="y b">approve</span>      yes <span class="d">(asked the developer)</span>
+    <span class="c b">+</span>   <span class="c b">fix</span>          claude changed 2 files in 28s
+    <span class="c b">%</span>   <span class="c b">verify</span>       <span class="g b">FIXED: replay survived, test passed</span>
+    <span class="g b">*</span>   <span class="g b">commit</span>       <span class="g b">b7646cb1 (Entire checkpoint)</span>
+
+  resilience  <span class="d">[</span><span class="y b">))))))))))))))))))))</span><span class="d">]</span> <span class="g b">100/100</span></pre>
+    </div>
+  </div>
+</header>
+
+<section id="modes">
+  <div class="wrap">
+    <div class="eyebrow">Two ways it finds bugs</div>
+    <h2>Faults that phones cause. Bugs that are just there.</h2>
+    <p class="lead">Most bugs that reach users don't show up when you tap through the app on a fast emulator with a
+      stable connection. droid-monkey looks for both kinds.</p>
+    <div class="modes">
+      <div class="card">
+        <div class="face">(x_x) attack</div>
+        <h3>Real-world faults, injected on purpose</h3>
+        <p class="muted">Android kills your app in the background, the user rotates mid-load, the network drops, a
+          permission gets revoked in Settings, memory runs low, the CPU is busy. droid-monkey does exactly that to
+          every screen that matters, and measures what breaks.</p>
+        <span class="cmd">droid-monkey attack builtin --diagnose</span>
+      </div>
+      <div class="card">
+        <div class="face">(o_O) hunt</div>
+        <h3>Bugs in normal use, no fault needed</h3>
+        <p class="muted">It walks every journey like a customer and checks after each step:</p>
+        <ul>
+          <li>the app's own logs: crashes, exceptions it caught and hid, main-thread jank</li>
+          <li>every screen: <code>null</code>, <code>NaN</code>, an unfilled <code>%d</code>, negative money</li>
+          <li>the whole journey, read by a model: numbers that don't add up across screens</li>
+        </ul>
+        <span class="cmd">droid-monkey hunt</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="hunt">
+  <div class="wrap">
+    <div class="eyebrow">Hunt, on a real run</div>
+    <h2>Five issues on two screens, found in 20 seconds.</h2>
+    <p class="lead">These are droid-monkey's own screenshots from a hunt on MonkeyMart, the demo shop. Nothing was
+      injected; it just went to buy a banana. The model's part cost a tenth of a cent. A model's finding only counts if it quotes text that code then finds on that
+      exact screen, so nothing is reported that isn't really there.</p>
+    <div class="show">
+      <figure>
+        <div class="phone">
+          <img src="assets/detail.jpg" alt="MonkeyMart item screen: Banana Bunch, ₹54, 10% off today, was ₹60, Ships in %d days, Add ₹-5 more for free delivery" width="540" height="690" loading="lazy">
+          <span class="hl" style="left:43%;top:49.5%;width:13%;height:7%"><b>1</b></span>
+          <span class="hl" style="left:36%;top:62.5%;width:28%;height:6%"><b>2</b></span>
+          <span class="hl" style="left:26%;top:68.5%;width:48%;height:6%"><b>3</b></span>
+        </div>
+        <figcaption>Step 2: the item, with today's deal.</figcaption>
+      </figure>
+      <figure>
+        <div class="phone">
+          <img src="assets/checkout.jpg" alt="MonkeyMart checkout: Banana Bunch, Total ₹48, Arrives in null days" width="540" height="690" loading="lazy">
+          <span class="hl" style="left:73%;top:18.5%;width:21%;height:7%"><b>1</b></span>
+          <span class="hl" style="left:3%;top:34.5%;width:37%;height:6%"><b>4</b></span>
+        </div>
+        <figcaption>Step 3: checkout, one tap later.</figcaption>
+      </figure>
+      <div>
+        <ul class="found">
+          <li><b>1</b><div><strong>The deal is applied twice.</strong> The item costs ₹54 after 10% off, but checkout
+            charges ₹48. <div class="by">journey review · quotes "₹54" (step 2) and "Total ₹48" (step 3)</div></div></li>
+          <li><b>2</b><div><strong>An unfilled placeholder:</strong> "Ships in %d days".
+            <div class="by">screen check · no model needed</div></div></li>
+          <li><b>3</b><div><strong>Negative money:</strong> "Add ₹-5 more for free delivery".
+            <div class="by">screen check</div></div></li>
+          <li><b>4</b><div><strong>"Arrives in null days"</strong>, because a <code>NumberFormatException</code> was caught
+            and only logged in <code>DeliveryEstimator.kt:10</code>.
+            <div class="by">app logs + screen check · with the stack trace</div></div></li>
+        </ul>
+        <p class="muted" style="margin-top:22px;font-size:.92rem">Every issue keeps the exact steps from launch, the
+          screenshot, the screen dump and the log of the step where it showed, ready for <code>droid-monkey fix</code>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="watch">
+  <div class="wrap">
+    <div class="eyebrow">Watch it work</div>
+    <h2>Screen recordings from the emulator, unedited.</h2>
+    <p class="lead">droid-monkey records the device during every attack and every replay. These clips come straight
+      out of its evidence folders; nothing was staged or cut.</p>
+    <div class="watch">
+
+      <div class="story pair">
+        <figure class="clip">
+          <video src="assets/video/fix-attack.mp4" poster="assets/video/fix-attack.jpg" muted loop playsinline controls preload="none"></video>
+          <span class="tag bad">before: lost_state</span>
+          <p>The attack: open the item, Android kills the app in the background, come back.</p>
+        </figure>
+        <figure class="clip">
+          <video src="assets/video/fix-replay.mp4" poster="assets/video/fix-replay.jpg" muted loop playsinline controls preload="none"></video>
+          <span class="tag ok">after: survived</span>
+          <p>The identical attack, replayed on the fixed build.</p>
+        </figure>
+        <div class="notes">
+          <h3>A fix that failed, a revised diagnosis, a fix that held</h3>
+          <p>MonkeyMart, run <code>run-20261012-180330</code>. The app came back on a different screen than the user
+            left. The first fix didn't hold up on the device, so droid-monkey revised its diagnosis and tried again.</p>
+          <ol class="timeline">
+            <li class="bad"><time>18:03</time>attack: <strong>lost_state</strong>, the app returned to the wrong screen</li>
+            <li class="you"><time>18:04</time>diagnosis (<code>MainActivity.kt:64</code>), developer asked: yes; fix 1</li>
+            <li class="bad"><time>18:05</time>verify: the replay <strong>still fails</strong>; not committed</li>
+            <li class="you"><time>18:06</time>revised diagnosis, asked again: yes; fix 2</li>
+            <li class="ok"><time>18:07</time>verify: <strong>replay survived</strong> and <code>NavigationStateTest</code> passed</li>
+            <li class="ok"><time>18:07</time>commit <code>92dfd2f2</code>, with an Entire checkpoint</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="story">
+        <figure class="clip">
+          <video src="assets/video/flow-rotate.mp4" poster="assets/video/flow-rotate.jpg" muted loop playsinline controls preload="none"></video>
+          <span class="tag bad">crashed</span>
+          <p>Open a product, rotate while its deal is still loading.</p>
+        </figure>
+        <div class="notes">
+          <h3>An attack the model designed, run on the device</h3>
+          <p>From the analysed user flow <code>view_product_detail</code>, the designer agent wrote this attack, checked it
+            against the building blocks and the screen map, and tried it on the emulator. It crashed the app with
+            <code>IllegalStateException</code> at <code>DetailScreen.kt:68</code>.</p>
+<pre class="spec"><span class="cm"># .droid-monkey/attacks/flow_rotate_during_detail_load.yaml, written by the model</span>
+<span class="k">description:</span> Rotate the device while the product detail spinner
+  and 5 s deal load are running, so the deal dialog must
+  not crash on the destroyed activity.
+<span class="k">screen:</span> <span class="v">shopscreen</span>
+<span class="k">steps:</span>
+- <span class="k">tap:</span> <span class="v">product_1</span>
+- <span class="k">wait:</span> <span class="v">1</span>
+- <span class="k">fault:</span> <span class="v">rotate</span>
+- <span class="k">settle:</span> <span class="v">8</span>
+<span class="k">expect:</span> [<span class="v">no_crash</span>]
+<span class="k">source:</span> <span class="v">flow</span></pre>
+        </div>
+      </div>
+
+      <div class="story">
+        <figure class="clip">
+          <video src="assets/video/wikipedia.mp4" poster="assets/video/wikipedia.jpg" muted loop playsinline controls preload="none"></video>
+          <span class="tag bad">lost_state</span>
+          <p>Search, type a query, the app is killed in the background, come back.</p>
+        </figure>
+        <div class="notes">
+          <h3>Not just a demo app: Wikipedia for Android</h3>
+          <p>The same agent, with nothing changed in its code, on the open-source Wikipedia app (a dev build). The
+            designer agent built this attack from Wikipedia's own <code>search_and_open</code> flow. droid-monkey's
+            verdict: <em>the app came back on a different screen than the user left</em>.</p>
+<pre class="spec"><span class="cm"># flow_search_query_process_death.yaml, written by the model</span>
+<span class="k">screen:</span> <span class="v">historyfragment</span>
+<span class="k">steps:</span>
+- <span class="k">tap:</span> <span class="v">org.wikipedia.dev:id/search_card</span>
+- <span class="k">fill:</span> <span class="v">true</span>
+- <span class="k">fault:</span> <span class="v">kill_in_background</span>
+- <span class="k">fault:</span> <span class="v">relaunch</span>
+<span class="k">expect:</span> [<span class="v">no_crash, keeps_fields, returns_to_screen</span>]</pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="eyebrow">How it works</div>
+    <h2>A model decides. Code judges. You approve.</h2>
+    <p class="lead">One loop, built on LangGraph: checkpointed after every step, resumable after a crash, and traced
+      end to end. Verdicts are measured on the device, never guessed by a model.</p>
+    <div class="loop" aria-label="The run loop">
+      <span class="step">analyze</span><span class="arrow">→</span>
+      <span class="step">explore</span><span class="arrow">→</span>
+      <span class="step">plan</span><span class="arrow">→</span>
+      <span class="step code">attack</span><span class="arrow">→</span>
+      <span class="step">diagnose</span><span class="arrow">→</span>
+      <span class="step you">ask you</span><span class="arrow">→</span>
+      <span class="step">fix</span><span class="arrow">→</span>
+      <span class="step code">verify</span><span class="arrow">→</span>
+      <span class="step code">commit</span>
+    </div>
+    <div class="legend">
+      <span style="--sw:var(--accent-soft)">decided by code, on the device</span>
+      <span style="--sw:var(--banana)">waits for your yes</span>
+      <span style="--sw:var(--line)">agents and models</span>
+    </div>
+    <div class="steps-grid">
+      <div class="card"><h3>analyze + explore</h3><p>A coding agent reads the repo, lists every screen in the code, then
+        drives the app on an emulator to map them: each screen gets a replayable path from launch and the source files
+        behind it.</p></div>
+      <div class="card"><h3>attack + verdict</h3><p>Attacks are built only from fixed, verified building blocks, never
+        arbitrary commands. Code reads the verdict from the crash buffer, field diffs, frame stats, live Activities
+        after a forced GC, launch times and a Perfetto trace.</p></div>
+      <div class="card"><h3>diagnose</h3><p>An agent reads the code with Entire's code graph and SQL over the Perfetto
+        trace, and returns the root cause with file:line evidence, a fix approach and a test plan.</p></div>
+      <div class="card"><h3>ask you</h3><p>No code changes without consent. Every attempt shows the issue, the measured
+        evidence, the root cause and the suggested change, and waits for yes, no or all.</p></div>
+      <div class="card"><h3>fix</h3><p>Claude Code, Codex or droid-monkey's own API agent edits only the app's sources.
+        No shell, no docs, no git history, no build files. One extra tool: compile.</p></div>
+      <div class="card"><h3>verify + commit</h3><p>Rebuild, replay the <strong>identical</strong> attack, run the new
+        test. Committed only if both pass, one commit per fix with an Entire checkpoint, on its own branch.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="attacks">
+  <div class="wrap">
+    <div class="eyebrow">Built-in attacks</div>
+    <h2>What real phones do to apps.</h2>
+    <p class="lead">Generic templates, filled in per app from the screen map, so they work on any Android app. Each
+      runs on its best screens by default. Describe your own in plain words with
+      <code>droid-monkey attacks new "…"</code>.</p>
+    <div class="scroll">
+    <table class="tbl">
+      <thead><tr><th>Attack</th><th>The fault</th><th>Fails as</th></tr></thead>
+      <tbody>
+        <tr><td>process_death</td><td>Fill a form, the system kills the app in the background, come back</td><td><span class="pill">crashed</span><span class="pill">lost_state</span></td></tr>
+        <tr><td>rotation</td><td>Rotate while work started by a tap is still running, or on a filled form</td><td><span class="pill">crashed</span><span class="pill">lost_state</span></td></tr>
+        <tr><td>network_loss</td><td>Drop wifi and data, then submit or start slow work</td><td><span class="pill">crashed</span><span class="pill">no_feedback</span></td></tr>
+        <tr><td>permission_revoke</td><td>Grant a permission, revoke it the way Settings does, use the feature again</td><td><span class="pill">crashed</span></td></tr>
+        <tr><td>low_memory</td><td>Recreate the screen, send trim-memory signals, force a GC</td><td><span class="pill">leaked</span></td></tr>
+        <tr><td>performance</td><td>Busy-loop 4 CPU cores, scroll, use the slowest action, press a key while it runs</td><td><span class="pill">froze</span><span class="pill">anr</span></td></tr>
+        <tr><td>slow_startup</td><td>5 cold and 3 hot starts, timed by Android against Play vitals</td><td><span class="pill">slow_start</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section id="proof">
+  <div class="wrap">
+    <div class="eyebrow">Results</div>
+    <h2>It found a real bug in Google's own sample app.</h2>
+    <div class="callout">
+      In <a href="https://github.com/android/architecture-samples">android/architecture-samples</a>, if you start
+      editing a task and Android kills the app in the background, your edits are gone when you come back.
+      droid-monkey reproduced it on a device, traced it to <code>AddEditTaskViewModel.kt:59</code>, and fixed it with a
+      <code>SavedStateHandle</code> and a regression test, on the first try.
+    </div>
+    <p class="lead" style="margin-top:26px">Same bug, same base commit, every fix judged by the same device replay:
+      plain Claude Code with a generic prompt against droid-monkey.</p>
+    <div class="stats">
+      <div class="stat"><div class="n vs">167k <s>2.17M</s></div><div class="l">coder tokens: about 13× fewer</div></div>
+      <div class="stat"><div class="n vs">$0.39 <s>$2.46</s></div><div class="l">to fix the bug</div></div>
+      <div class="stat"><div class="n vs">2 <s>14</s></div><div class="l">files changed (+55/−5, against +424/−36 of speculative hardening)</div></div>
+      <div class="stat"><div class="n">1st <small>try</small></div><div class="l">fixed and verified on the device</div></div>
+    </div>
+    <p class="muted" style="margin-top:22px;font-size:.92rem">Without a reproduction or a stack trace, plain Claude Code
+      read its way through the repo and changed code for faults that, on the device, don't happen. On MonkeyMart's four
+      planted bugs droid-monkey fixed all four on the first try. All results are single runs;
+      <a href="https://github.com/shubhasai/droid-monkey#results">full tables in the README</a>.</p>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <div class="eyebrow">Safe by design</div>
+    <h2>It never changes your code without a yes.</h2>
+    <div class="cols">
+      <div class="card"><h3>Consent and isolation</h3><p>Each fix waits for your answer. Fixes go on a separate
+        <code>droid-monkey/&lt;run&gt;</code> branch, and you're put back on your own branch at the end.</p></div>
+      <div class="card"><h3>Never touches a live backend</h3><p>It refuses to sign up, log in, post or pay on a real
+        backend. Signed-in screens are reached with a test account you provide.</p></div>
+      <div class="card"><h3>Same source, same build</h3><p>It never diagnoses a build that wasn't built from the source
+        it's reading, and only keeps the coding agent's edits inside the app's sources.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="built">
+  <div class="wrap">
+    <div class="eyebrow">Built with</div>
+    <h2>Every run is traced, checkpointed and costed.</h2>
+    <div class="partners">
+      <div class="card"><h3>neatlogs <small>tracing</small></h3><p>One trace per run: every graph node, model call,
+        tool call and Claude Code session, with exact tokens and cost per step.</p></div>
+      <div class="card"><h3>Entire <small>checkpoints</small></h3><p>Every fix commit carries an Entire-Checkpoint
+        linking it to the session that wrote it. The diagnoser searches Entire's code graph.</p></div>
+      <div class="card"><h3>cfo.ai <small>business plan</small></h3><p>A CI add-on plan built from droid-monkey's
+        measured costs. The plan sets each tier's fix budget, and <code>run --tier</code> enforces it.</p></div>
+    </div>
+    <p class="stack">Python 3.12 · LangGraph · Claude (Haiku 5.5 for reasoning, Sonnet 5.5 for code) · Claude Code / Codex · MCP · adb, emulator, Gradle · Perfetto</p>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap start">
+    <div>
+      <div class="eyebrow">Get started</div>
+      <h2>Five commands to your first verified fix.</h2>
+      <p class="lead">You need the Android SDK with one emulator, an Anthropic API key, and a coding agent (Claude
+        Code, Codex, or just the API key). The <a href="https://github.com/shubhasai/droid-monkey/blob/main/SETUP.md">install
+        guide</a> goes from an empty machine to the first run.</p>
+      <div class="cta" style="margin-top:22px">
+        <a class="btn primary" href="https://github.com/shubhasai/droid-monkey/blob/main/SETUP.md">Install guide</a>
+        <a class="btn" href="https://github.com/shubhasai/droid-monkey">Source on GitHub</a>
+      </div>
+    </div>
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i><small>your-android-app</small></div>
+<pre><span class="d">$</span> droid-monkey init        <span class="d"># monkey.yaml: package, module, AVD, JDK</span>
+<span class="d">$</span> droid-monkey analyze     <span class="d"># ANALYSIS.md + flows worth testing</span>
+<span class="d">$</span> droid-monkey explore     <span class="d"># the screen map</span>
+<span class="d">$</span> droid-monkey hunt        <span class="d"># bugs in normal use</span>
+<span class="d">$</span> droid-monkey run         <span class="d"># attack, diagnose, ask, fix, verify</span>
+
+<span class="d">$</span> droid-monkey dashboard   <span class="d"># live view of every run</span>
+<span class="d">$</span> droid-monkey pr &lt;run-id&gt;  <span class="d"># open a PR with the evidence</span></pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <div><strong>droid-monkey</strong> · built solo for neatHack 2026 · MIT licence</div>
+      <div><a href="https://github.com/shubhasai/droid-monkey">github.com/shubhasai/droid-monkey</a></div>
+    </div>
+<pre aria-hidden="true">     .-"-.
+   _/.-.-.\_
+  ( ( ^ ^ ) )
+   |/  "  \|
+    \ \_/ /
+     `---`</pre>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll(".copy").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var text = document.getElementById(b.dataset.copy).textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(function () {
+      b.textContent = "copied"; setTimeout(function () { b.textContent = "copy"; }, 1400);
+    }, function () { b.textContent = "select it"; });
+  });
+});
+// play a clip only while it is on screen, so the page stays light
+if ("IntersectionObserver" in window) {
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      var v = e.target;
+      if (e.isIntersecting) { v.preload = "auto"; v.play().catch(function () {}); } else { v.pause(); }
+    });
+  }, {threshold: 0.4});
+  document.querySelectorAll(".clip video").forEach(function (v) { io.observe(v); });
+}
+</script>
+</body>
+</html>
