@@ -29,6 +29,39 @@ analyze ──► explore ──► run:  plan → attack → decide → diagnos
 | verify | Rebuild, replay the identical attack, run the new test. Fixed only if both pass; otherwise retry with a revised diagnosis (max 2) or roll back |
 | commit | One commit per fix on `droid-monkey/<run>`, with an Entire checkpoint. At the end you're put back on your own branch |
 
+## Features
+
+**Understand the app**
+- **Works on any Android app.** `init` detects the module, applicationId, build variant, AVD and a JDK your Gradle can run on; nothing app-specific lives in droid-monkey's code.
+- **Code analysis** (`analyze`): manifest, permissions, dependencies and 10 risk patterns with file:line, then a coding agent's read of the repo → `ANALYSIS.md` and the user flows worth testing.
+- **Screen map** (`explore`): a coding agent drives the app on the emulator from a checklist of every screen in the code. Each screen gets a replayable path from launch and the source files behind it. Modes: `agent`, `fast` (no model), `manual` (you drive, it records) and `rules`; time, screen and spend limits.
+- **Signed-in apps**: a test account signs in after every launch (`entry_steps`, credentials from `~/.droid-monkey/.env`).
+
+**Find what breaks**
+- **7 built-in real-world attacks**: process death, rotation, network loss, permission revoke, low memory, CPU load and slow startup, each on the app's best screens (`--screens`).
+- **App-specific attacks**: from the analysed user flows (`attacks from-flows`), designed by an agent for this app (`attacks suggest`), or described in plain words (`attacks new "…"`). Every spec is built from verified building blocks and tried on the emulator before it's saved.
+- **Bugs in normal use** (`hunt`), with no fault injected: crashes and swallowed exceptions in the app's logs, `null`/`NaN`/unfilled placeholders and negative money on screen, and logic bugs across a journey found by a model that must quote the screen it cites.
+- **UX audit** (`ux`): touch targets, unlabelled icons, taps to reach each screen, predicted attention heatmaps, measured waits against response-time limits, and a model's review of every screenshot.
+- **One ranked list** (`issues`): every open issue from attacks, hunt and the UX audit, ranked by user impact.
+- **Verdicts measured in code, not guessed**: crash and ANR buffers, field diffs, frame stats, live Activities after a forced GC, cold and hot start times.
+- **Deep evidence**: Perfetto traces analysed with trace_processor (what the main thread was doing in each long block), the main thread's stack from Android's own ANR record, leak reference chains from Shark (LeakCanary's analyser), screen recordings, screenshots, UI dumps and logcat for every attack.
+
+**Fix it, and prove it**
+- **Root-cause diagnosis** with file:line evidence, using `read_code`, `search_code`, Entire's code graph and SQL over the Perfetto trace.
+- **Never changes code without your yes**: every fix shows the issue, the measured evidence, the root cause and the suggested change, and waits.
+- **Three coding agents**: Claude Code, Codex, or droid-monkey's own agent on the Anthropic API. The fixer edits only the app's sources, has no shell, and gets a `compile` tool.
+- **Proof on the device**: rebuild, replay the identical attack, run the new regression test. Committed only if both pass.
+- **Recovery**: a failed fix goes back into a revised diagnosis and the same coder session (up to 2 tries), or is rolled back without touching your other edits. An emulator watchdog restarts a hung device, and `run --resume` continues a killed run.
+- **Fix hunt and UX issues** (`fix`): the issue is re-checked on the device and committed only if it's gone.
+- **One commit per fix** on a `droid-monkey/<run>` branch, each with an Entire checkpoint; `pr` opens a GitHub PR with the evidence table.
+
+**See and share the results**
+- **Live dashboard** (`dashboard`): every run, screen, issue, analysis and file in `.droid-monkey/`, refreshing as runs write; stream the emulator's screen and run any command from the page.
+- **Reports**: an HTML report per run with recordings and charts, a PR body, a score card, a receipt with time, tokens and cost per step, and before/after comparisons (`report`, `compare`).
+- **Tracing**: every run is one neatlogs trace, with every graph node, model call and coding session.
+- **Cost control**: `econ` turns measured costs into the cfo.ai business plan's inputs, and `run --tier` enforces the plan's fix budget.
+- **A CLI with character**: ASCII monkey art for every result, a banana meter for the resilience score.
+
 ## Attacks
 
 Built-in attacks are generic templates, filled per app from the screen map:
@@ -190,6 +223,7 @@ No false alarms on either app as it is.
 How each partner tool is used, with the evidence: [evidence/](evidence/README.md) ([neatlogs](evidence/neatlogs.md) · [Entire](evidence/entire.md) · [cfo.ai](evidence/cfo-ai.md)).
 
 - **neatlogs:** every run is one trace. It covers every graph node and every model and tool call, and each `claude -p` session is an LLM span with its exact tokens and cost. The app is the "end user" and the run id is the session.
+- **Before and after, in neatlogs:** the MonkeyMart v1 and v4 runs side by side (in v4 every fix lands first try, with 13% fewer coder tokens), and the trace of the recovery run: [evidence/neatlogs.md](evidence/neatlogs.md#before-and-after-an-improvement-in-neatlogs).
 - **Entire:** the Claude Code session that built droid-monkey itself is attached to this repo as a checkpoint, and every fix commit droid-monkey makes in an app carries an `Entire-Checkpoint` trailer linking it to the recorded Claude Code session that wrote it. The diagnoser also uses Entire's code graph to find the symbols involved.
 
 ### How neatlogs helped
@@ -248,7 +282,6 @@ droid-monkey sells as a CI add-on for Android teams. The plan is built in cfo.ai
 
 - Codex mode is implemented from OpenAI's docs but hasn't been tested end to end.
 - API-agent fixes have no Entire checkpoint yet.
-- Each built-in attack tests the single best candidate screen. Flow-based coverage (whole user journeys) is next.
 - Measurements come from a debug build on an emulator: slower than release on a phone, so a pass is conservative.
 
 ## Built with

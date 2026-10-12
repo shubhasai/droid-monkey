@@ -35,10 +35,36 @@ The fix (commit `08fdebd`):
 
 The costs in [`business/drivers.csv`](../business/drivers.csv) are the same numbers that are on these spans. Claude Code reports its own cost, and droid-monkey prices its API calls the same way for the receipt and for neatlogs. `droid-monkey econ` reads them from the run receipts. With a neatlogs read token (`NEATLOGS_TOKEN`), each row could also cite its trace id, the way FirstRun's plan does.
 
-## Links still to add (from the neatlogs app)
+## Before and after an improvement, in neatlogs
 
-- [ ] A trace from before and after an improvement, with the numbers compared, for example the explore incident before and after `08fdebd`.
-- [ ] The trace link for the recovery run below (neatlogs session `run-20261012-175601`).
+The same 4 attacks on MonkeyMart from the same base: v1 with no diagnosis, and v4 after three rounds of improvements, each made from the previous run's data (diagnosis, a compile tool for the coder, JVM-first test plans). Each run is one neatlogs session.
+
+| | Before: v1, no diagnosis | After: v4, diagnosis + JVM-first test plans |
+|---|---|---|
+| neatlogs session | [`cmp-v1-naive`](https://app.neatlogs.com/analytics?orgId=45231b97-af94-485d-86e4-33372d00e625&projectId=88c2c7bb-fa0a-40ef-973f-d951070b8f3b&start=2026-09-28T13:44:14.626Z&end=2026-10-12T13:44:14.626Z&granularity=auto&f=session_id:in:cmp-v1-naive) | [`cmp-v4-test-plan`](https://app.neatlogs.com/analytics?orgId=45231b97-af94-485d-86e4-33372d00e625&projectId=88c2c7bb-fa0a-40ef-973f-d951070b8f3b&start=2026-09-28T13:44:14.626Z&end=2026-10-12T13:44:14.626Z&granularity=auto&f=session_id:in:cmp-v4-test-plan) |
+| Duration (neatlogs) | 8.1 min | 8.9 min |
+| Claude Code fix sessions (traced locally) | **$1.28**, 575k tokens over 4 sessions | **$1.27**, 498k tokens over 4 sessions |
+| Fixed | 4/4 | 4/4, all first try |
+
+What changed: in v4 the diagnoser reads the code (`read_code`, `search_code`) before the coder starts. That diagnosis is what lets the coder fix each bug on the first try with 13% fewer tokens.
+
+**Claude Code cost, traced locally:** in these two runs, and in the recovery run below, neatlogs recorded droid-monkey's own calls, but the Claude Code fix sessions were not exported as spans. droid-monkey records each session's tokens and cost locally, from Claude Code's own report, in the run receipt. Entire's checkpoint for each fix session gives the same token counts (`entire checkpoint tokens <id>`):
+
+| Fix | v1 session (checkpoint) | v4 session (checkpoint) |
+|---|---|---|
+| rotation | 159.4k (`01M4NNS9…`) | 158.2k (`01M4NR30…`) |
+| network_loss | 106.7k (`01M4NNXJ…`) | 83.0k (`01M4NR7N…`) |
+| permission_revoke | 132.4k (`01M4NP1B…`) | 104.1k (`01M4NRBP…`) |
+| process_death | 176.6k (`01M4NP5B…`) | 152.3k (`01M4NRG6…`) |
+| **Total** | **575.1k** | **497.6k** |
+
+This is also why the recovery run shows $0.366 in neatlogs against $0.95 in its receipt: the receipt includes the Claude Code sessions.
+
+## The recovery run in neatlogs
+
+Session [`run-20261012-175601`](https://app.neatlogs.com/analytics?orgId=45231b97-af94-485d-86e4-33372d00e625&projectId=88c2c7bb-fa0a-40ef-973f-d951070b8f3b&start=2026-09-28T13:44:14.626Z&end=2026-10-12T13:44:14.626Z&granularity=auto&f=session_id:in:run-20261012-175601): 18 traces, 0.0% error rate, $0.366 traced, 96.4% of it on `claude-sonnet-5-5`. A Slow LLM Response detection fired on 2 of the 18 traces (11.1%). The run is described step by step below.
+
+The links open the neatlogs dashboard for the droid-monkey project; signing in to that project is required.
 
 ## A failed action and the recovery path
 
