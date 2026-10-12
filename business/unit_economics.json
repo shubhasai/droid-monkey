@@ -1,0 +1,118 @@
+{
+ "generated_at": "2026-10-12T17:07:31",
+ "inputs": {
+  "margin_floor": 0.7,
+  "runner_price_per_minute": 0.008,
+  "run_overhead_minutes": 5.0,
+  "attacks_per_run": 8,
+  "fix_attempt_share": 0.5,
+  "price_per_verified_fix": 3.0,
+  "tiers": {
+   "free": {
+    "price": 0.0,
+    "runs_per_month": 10,
+    "fixes": false
+   },
+   "team": {
+    "price": 99.0,
+    "runs_per_month": 30,
+    "fixes": true
+   },
+   "scale": {
+    "price": 499.0,
+    "runs_per_month": 300,
+    "fixes": true
+   }
+  }
+ },
+ "measured": {
+  "apps": [
+   "MonkeyMart",
+   "wikipedia",
+   "architecture-samples"
+  ],
+  "fix_attempts": 4,
+  "verified_fixes": 2,
+  "cost_per_fix_attempt_mean": 0.5597650000000001,
+  "cost_per_fix_attempt_p50": [
+   0.63726,
+   "MonkeyMart run-20261012-160850 low_memory_on_detailscreen"
+  ],
+  "cost_per_fix_attempt_p90": [
+   0.80614,
+   "wikipedia run-20261012-125436 low_memory"
+  ],
+  "cost_per_fix_attempt_max": [
+   0.80614,
+   "wikipedia run-20261012-125436 low_memory"
+  ],
+  "cost_per_verified_fix": 1.1195300000000001,
+  "reasoning_cost_per_run": 0.0006774666666666667,
+  "runs": 3,
+  "attack_seconds_mean": 31.243243243243242,
+  "attack_seconds_p90": 43.6,
+  "attacks": 74,
+  "attack_failure_rate": 0.36486486486486486,
+  "setup_cost_per_app": [
+   [
+    1.2348347500000003,
+    "MonkeyMart"
+   ],
+   [
+    3.73916325,
+    "wikipedia"
+   ],
+   [
+    1.3433299999999997,
+    "architecture-samples"
+   ]
+  ],
+  "ux_audit_cost_per_app": [
+   [
+    0.182444,
+    "MonkeyMart"
+   ],
+   [
+    1.167992,
+    "wikipedia"
+   ]
+  ],
+  "hunt_cost_mean": 0.0007656,
+  "hunts": 1
+ },
+ "compute_per_run": 0.0733,
+ "expected_fix_attempts_per_run": 1.46,
+ "verified_fix_margin": 0.627,
+ "tiers": {
+  "free": {
+   "price": 0.0,
+   "runs_per_month": 10,
+   "fixes": false,
+   "revenue_per_run": 0.0,
+   "fix_budget_per_run": 0.0,
+   "fixes_within_budget": 0.0,
+   "expected_cost_per_run": 0.074,
+   "gross_margin_expected": null
+  },
+  "team": {
+   "price": 99.0,
+   "runs_per_month": 30,
+   "fixes": true,
+   "revenue_per_run": 3.3,
+   "fix_budget_per_run": 0.916,
+   "fixes_within_budget": 1.64,
+   "expected_cost_per_run": 0.891,
+   "gross_margin_expected": 0.73
+  },
+  "scale": {
+   "price": 499.0,
+   "runs_per_month": 300,
+   "fixes": true,
+   "revenue_per_run": 1.6633,
+   "fix_budget_per_run": 0.425,
+   "fixes_within_budget": 0.76,
+   "expected_cost_per_run": 0.891,
+   "gross_margin_expected": 0.464
+  }
+ }
+}

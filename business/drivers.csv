@@ -1,0 +1,35 @@
+driver,value,unit,measured,source
+fix_attempts_measured,4,fix attempts,yes,"droid-monkey run receipts (MonkeyMart, wikipedia, architecture-samples); the same costs are on the runs' neatlogs spans"
+verified_fixes_measured,2,fixes,yes,"droid-monkey run receipts (MonkeyMart, wikipedia, architecture-samples); the same costs are on the runs' neatlogs spans"
+cost_per_fix_attempt_mean,0.55977,USD,yes,"droid-monkey run receipts (MonkeyMart, wikipedia, architecture-samples); the same costs are on the runs' neatlogs spans; diagnosis + coding agent"
+cost_per_fix_attempt_p50,0.63726,USD,yes,run MonkeyMart run-20261012-160850 low_memory_on_detailscreen
+cost_per_fix_attempt_p90,0.80614,USD,yes,run wikipedia run-20261012-125436 low_memory
+cost_per_fix_attempt_max,0.80614,USD,yes,run wikipedia run-20261012-125436 low_memory
+cost_per_verified_fix,1.11953,USD,yes,"all fix spend / verified fixes, droid-monkey run receipts (MonkeyMart, wikipedia, architecture-samples); the same costs are on the runs' neatlogs spans"
+reasoning_cost_per_run,0.00068,USD,yes,"3 runs, plan + decide"
+attack_seconds_mean,31.24324,seconds,yes,74 attack verdicts
+attack_seconds_p90,43.6,seconds,yes,74 attack verdicts
+attack_failure_rate,0.36486,fraction,yes,"74 attack verdicts, broke / all; test apps, some with planted bugs, so higher than a typical app"
+hunt_cost_mean,0.00077,USD,yes,1 hunts
+setup_cost_MonkeyMart,1.23483,"USD per app, once",yes,MonkeyMart analysis-run.json
+setup_cost_wikipedia,3.73916,"USD per app, once",yes,wikipedia analysis-run.json
+setup_cost_architecture-samples,1.34333,"USD per app, once",yes,architecture-samples analysis-run.json
+ux_audit_cost_MonkeyMart,0.18244,USD per app,yes,MonkeyMart ux-audit.json
+ux_audit_cost_wikipedia,1.16799,USD per app,yes,wikipedia ux-audit.json
+runner_price_per_minute,0.008,USD,no,assumption: Linux CI runner with KVM
+run_overhead_minutes,5.0,minutes,no,assumption: emulator boot + build
+attacks_per_run,8,attacks,no,assumption
+fix_attempt_share,0.5,fraction,no,assumption: failures the developer lets it fix
+compute_per_run,0.0733,USD,no,runner price x (overhead + attacks x attack_seconds_mean)
+expected_fix_attempts_per_run,1.46,fixes,no,attacks_per_run x attack_failure_rate x fix_attempt_share
+margin_floor,0.7,fraction,no,"assumption, set by the founder"
+price_per_verified_fix,3.0,USD,no,assumption: usage price
+free_price,0.0,USD per month,no,assumption
+free_runs_per_month,10,runs,no,assumption
+free_fix_budget_per_run,0.0,USD,no,attack-only tier: no fixes
+team_price,99.0,USD per month,no,assumption
+team_runs_per_month,30,runs,no,assumption
+team_fix_budget_per_run,0.916,USD,no,price / runs x (1 - margin_floor) - compute - reasoning
+scale_price,499.0,USD per month,no,assumption
+scale_runs_per_month,300,runs,no,assumption
+scale_fix_budget_per_run,0.425,USD,no,price / runs x (1 - margin_floor) - compute - reasoning

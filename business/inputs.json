@@ -1,0 +1,25 @@
+{
+ "margin_floor": 0.7,
+ "runner_price_per_minute": 0.008,
+ "run_overhead_minutes": 5.0,
+ "attacks_per_run": 8,
+ "fix_attempt_share": 0.5,
+ "price_per_verified_fix": 3.0,
+ "tiers": {
+  "free": {
+   "price": 0.0,
+   "runs_per_month": 10,
+   "fixes": false
+  },
+  "team": {
+   "price": 99.0,
+   "runs_per_month": 30,
+   "fixes": true
+  },
+  "scale": {
+   "price": 499.0,
+   "runs_per_month": 300,
+   "fixes": true
+  }
+ }
+}

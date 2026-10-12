@@ -77,8 +77,9 @@ class Loop:
     def __init__(self, ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known,
                  only: list[str] | None, coder_model: str, echo=print, fail_first_fix: bool = False,
                  naive: bool = False, compile_tool: bool = True, auto_fix: bool = False, agent: str = "claude",
-                 screens_per_attack: int = 2):
+                 screens_per_attack: int = 2, fix_budget: float | None = None, tier: str = ""):
         self.agent = agent
+        self.fix_budget, self.tier = fix_budget, tier  # from the business plan (econ); None: no limit
         self.screens_per_attack = screens_per_attack
         self.compile_tool = compile_tool
         self.auto_fix = auto_fix
@@ -222,10 +223,33 @@ class Loop:
         state = {**state, "log": state.get("log", []) + wlog}
         return {"result": asdict(res), "log": self.note(state, line)}
 
+    def spent(self, state: RunState) -> float:
+        """Model spend of this run so far: planning and decisions, and every diagnosis and fix."""
+        done = sum(float((o.get("metrics") or {}).get("diag_cost_usd") or 0) + float((o.get("metrics") or {}).get("coder_cost_usd") or 0)
+                   for o in state.get("outcomes", []))
+        return (done + state.get("diag_cost", 0.0) + state.get("coder_cost", 0.0)
+                + (cost_usd(self.cfg.llm.model, state.get("reason_in", 0), state.get("reason_out", 0)) or 0.0))
+
+    def within_budget(self, state: RunState) -> tuple[bool, str]:
+        """The tier's fix budget (business plan): is there room for another fix attempt? A neatlogs GUARDRAIL span."""
+        if self.fix_budget is None:
+            return True, ""
+
+        @tracing.span(kind="GUARDRAIL", name="budget")
+        def check(spent: float, budget: float, tier: str) -> dict:
+            return {"ok": spent < budget, "spent_usd": round(spent, 4), "budget_usd": budget, "tier": tier}
+        r = check(self.spent(state), self.fix_budget, self.tier)
+        return r["ok"], f"fix budget spent: ${r['spent_usd']:.2f} of ${self.fix_budget:.2f} for the {self.tier or 'set'} tier"
+
     def decide(self, state: RunState) -> RunState:
         """Model chooses the next step; code checks it is allowed."""
         res, attempts = state["result"], state.get("attempts", 0)
         verifying = state.get("decision") in ("verify_failed", "build_failed")
+        if res["outcome"] not in ("unreachable", "survived") or verifying:
+            ok, why = self.within_budget(state)
+            if not ok:  # keep attacking (free), stop spending on fixes: the plan's margin floor set this limit
+                return {"decision": "give_up" if verifying else "next", "decision_reason": why,
+                        "failure_note": why, "log": self.note(state, f"decide: {'give up' if verifying else 'next'} ({why})")}
         if not verifying and res["outcome"] == "unreachable":
             return {"decision": "next", "decision_reason": f"could not reach the attacked screen: {res['reason']}",
                     "log": self.note(state, "decide: next (screen unreachable; re-explore after this run)")}
@@ -480,13 +504,15 @@ class Loop:
 def run(ctx: Context, smap: ScreenMap, profile: AppProfile, saved: dict, known: specs_mod.Known, run_id: str,
         only: list[str] | None = None, coder_model: str = "claude-sonnet-5-5", resume: bool = False, echo=print,
         fail_first_fix: bool = False, naive: bool = False, compile_tool: bool = True, auto_fix: bool = False,
-        ask=None, agent: str = "claude", screens_per_attack: int = 2) -> dict:
+        ask=None, agent: str = "claude", screens_per_attack: int = 2, fix_budget: float | None = None,
+        tier: str = "") -> dict:
     """`ask(proposal) -> "yes" | "no" | "all"` answers the approval question; without it nothing is fixed unasked."""
     tracing.init(tags=[f"run:{run_id}", f"app:{ctx.cfg.package}", f"mode:{'naive' if naive else 'droid-monkey'}"])
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     loop = Loop(ctx, smap, profile, saved, known, only, coder_model, echo, fail_first_fix=fail_first_fix, naive=naive,
-                compile_tool=compile_tool, auto_fix=auto_fix, agent=agent, screens_per_attack=screens_per_attack)
+                compile_tool=compile_tool, auto_fix=auto_fix, agent=agent, screens_per_attack=screens_per_attack,
+                fix_budget=fix_budget, tier=tier)
     state_db = paths.run_dir(ctx.cfg.app_dir, run_id) / "state.sqlite"
     state_db.parent.mkdir(parents=True, exist_ok=True)
 

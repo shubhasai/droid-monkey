@@ -707,16 +707,27 @@ def attacks_new(prompt: str, app_dir: Path, try_on_device: bool) -> None:
                                                       "demonstrate the retry path.")
 @click.option("--naive", is_flag=True, help="Baseline for comparisons: skip diagnosis, give the coder only the failure.")
 @click.option("--no-compile-tool", is_flag=True, help="Do not give the coder the compile tool (for comparisons).")
+@click.option("--tier", default=None, help="Pricing tier from the business plan (`droid-monkey econ`): the run keeps "
+              "attacking but stops fixing once it has spent that tier's fix budget, so every run keeps the plan's margin.")
 @click.option("--auto-fix", is_flag=True, help="Fix without asking (CI, benchmarks). By default each fix is shown "
                                                  "with its evidence and suggested change, and waits for your yes.")
 @click.option("--screens", type=int, default=None, help="Built-in attacks run on this many of their best screens "
                                                       "(default: screens_per_attack in monkey.yaml, else 2).")
 def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, resume_id: str | None,
         fail_first_fix: bool, naive: bool, no_compile_tool: bool, auto_fix: bool, agent: str | None,
-        screens: int | None) -> None:
+        screens: int | None, tier: str | None) -> None:
     """The full loop: plan, attack, diagnose, ask you, fix with the coding agent, verify by replay, commit."""
     from . import approval
+    budget = None
+    if tier:
+        from . import econ
+        try:
+            budget = econ.tier_budget(tier)
+        except ValueError as e:
+            raise click.ClickException(str(e))
     theme.banner("run")
+    if tier:
+        theme.note(f"tier {tier}: fix budget ${budget:.2f} per run (business plan); attacks continue after it is spent")
     if auto_fix:
         theme.warn("--auto-fix: droid-monkey will change code on its run branch without asking you first")
 
@@ -739,7 +750,8 @@ def run(app_dir: Path, only: str | None, coder_model: str, run_id: str | None, r
     names = [n.strip() for n in only.split(",")] if only else None
     final = loop.run(ctx, smap, prof, saved, known, run_id, only=names, coder_model=coder_model, agent=backend,
                      resume=bool(resume_id), echo=theme.loop_echo, fail_first_fix=fail_first_fix, naive=naive,
-                     compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask, screens_per_attack=screens or ctx.cfg.screens_per_attack)
+                     compile_tool=not no_compile_tool, auto_fix=auto_fix, ask=ask, screens_per_attack=screens or ctx.cfg.screens_per_attack,
+                     fix_budget=budget, tier=tier or "")
     from .report import score_of
     outcomes = final.get("outcomes", [])
     theme.header("scoreboard", "(^o^)")
@@ -902,6 +914,33 @@ def fix_pr_body(f: dict) -> str:
             f"### The fix\n{f.get('agent_note', '')}\n\n{files}\n\n### Checked\n{f.get('check', '')}: droid-monkey "
             f"rebuilt the app, cleared its data, re-walked the steps and ran the same detectors.\n\n"
             + (f"Entire checkpoint: `{f['checkpoint']}`\n" if f.get("checkpoint") else ""))
+
+
+@main.command()
+@click.option("--app-dir", "app_dirs", multiple=True, type=click.Path(path_type=Path, file_okay=False),
+              help="An app whose runs to read (repeatable). Default: the current folder.")
+@click.option("--out", type=click.Path(path_type=Path, file_okay=False), default=Path("business"), show_default=True,
+              help="Where drivers.csv, unit_economics.json and inputs.json go.")
+def econ(app_dirs: tuple[Path, ...], out: Path) -> None:
+    """Unit economics from droid-monkey's own runs, for the cfo.ai business plan: drivers.csv (measured costs and
+    marked assumptions, each with its source) and a fix budget per pricing tier that `run --tier` enforces."""
+    from . import econ as econ_mod
+    doc = econ_mod.run([Path(a) for a in app_dirs] or [Path(".")], out)
+    m = doc["measured"]
+    theme.header("unit economics", "(^o^)")
+    theme.kv("measured", f"{m['fix_attempts']} fix attempts ({m['verified_fixes']} verified), {m['attacks']} attacks, "
+                         f"{m['runs']} runs, apps: {', '.join(m['apps'])}")
+    theme.kv("fix attempt", f"mean ${m['cost_per_fix_attempt_mean']:.2f}, p90 ${m['cost_per_fix_attempt_p90'][0]:.2f}; "
+                            f"per verified fix ${m['cost_per_verified_fix']:.2f}")
+    theme.kv("attack", f"{m['attack_seconds_mean']:.0f} s mean, {m['attack_failure_rate']:.0%} break the app")
+    theme.kv("compute", f"${doc['compute_per_run']:.3f} per run (assumption: runner price)")
+    for name, t in doc["tiers"].items():
+        gm = f"{t['gross_margin_expected']:.0%}" if t["gross_margin_expected"] is not None else "-"
+        theme.kv(name, f"${t['price']:.0f}/mo, {t['runs_per_month']} runs: fix budget ${t['fix_budget_per_run']:.2f}/run "
+                       f"(~{t['fixes_within_budget']} fixes), expected margin {gm}")
+    theme.path_line("cfo.ai input", out / "drivers.csv")
+    theme.path_line("tier caps", out / "unit_economics.json")
+    theme.note(f"edit assumptions in {out / 'inputs.json'} and rerun")
 
 
 @main.command()
