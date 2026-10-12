@@ -211,6 +211,7 @@ class SpecRunner:
                                  f"Java heap {before['java_heap_kb'] // 1024} -> {after['java_heap_kb'] // 1024} MB"
                                  + ("" if after["gc"] else " (GC not forced: build is not debuggable)"))
         if after["activities"] > before["activities"]:
+            self._find_leak()
             return Verdict(LEAKED, f"{after['activities'] - before['activities']} destroyed Activity instance(s) still alive "
                                    f"after a forced GC ({before['activities']} -> {after['activities']}): something keeps a "
                                    "reference to an old Activity")
@@ -218,6 +219,18 @@ class SpecRunner:
             return Verdict(LEAKED, f"Java heap grew {grew // 1024} MB ({before['java_heap_kb'] // 1024} -> "
                                    f"{after['java_heap_kb'] // 1024} MB) after a forced GC: memory is not released")
         return None
+
+    def _find_leak(self) -> None:
+        """What holds the leaked screen: Shark's reference chain from a heap dump (see tools/leaks.py)."""
+        from dataclasses import asdict
+        from .tools import leaks
+        rep = leaks.analyse(self.driver.adb, self.driver.package, self.driver.dir)
+        self.metrics["leak"] = asdict(rep)
+        if rep.trace:
+            (self.driver.dir / "leak-trace.txt").write_text(rep.trace + "\n")
+            self.driver.notes.append("leak trace (Shark): " + (", ".join(rep.leaking) or "see leak-trace.txt"))
+        if rep.note:
+            self.driver.notes.append(f"leak: {rep.note}")
 
     def _visible_texts(self, screen: ui.Screen) -> set[str]:
         return {n.text or n.desc for n in screen.app_nodes(self.driver.package) if (n.text or n.desc) and not n.editable}

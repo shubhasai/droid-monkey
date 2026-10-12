@@ -28,6 +28,15 @@ def proposal(item: dict, result: dict, diagnosis: dict) -> dict:
         b, a = metrics["memory_before"], metrics["memory_after"]
         evidence.append(f"after forced GC: Activities {b['activities']} -> {a['activities']}, "
                         f"Java heap {b['java_heap_kb'] // 1024} -> {a['java_heap_kb'] // 1024} MB")
+    leak = metrics.get("leak") or {}
+    if leak.get("destroyed"):
+        evidence.append("destroyed during the attack (LeakCanary): " + ", ".join(leak["destroyed"][:6]))
+    if leak.get("trace"):
+        evidence.append("leak trace (Shark): " + (", ".join(leak.get("leaking") or []) or "see leak-trace.txt"))
+        evidence += ["  " + line for line in leak["trace"].splitlines()
+                     if "~~~" in line or "Leaking: YES" in line or "╰→" in line or "GC Root" in line][:12]
+    elif leak.get("note"):
+        evidence.append(f"leak: {leak['note']}")
     for kind, runs in (metrics.get("startup") or {}).items():
         evidence.append(f"{kind} start: " + ", ".join(f"{r['ms']} ms" for r in runs))
     if metrics.get("trace"):

@@ -49,7 +49,9 @@ trace: start from the Perfetto analysis. For a freeze, the main thread's state i
 kind of work: 'sleeping/blocked' means a blocking call on the main thread (Thread.sleep, a lock, runBlocking, a
 synchronous network or database call, a binder call), 'running' means heavy computation, 'blocked on I/O' means
 disk access; then find that work in the code behind the slice (input/click handlers, composition, onCreate). For a
-leak, look for what outlives the Activity: static or object fields, singletons, listeners or callbacks registered
+leak, start from Shark's leak trace when there is one: it is the exact reference chain, so name the
+reference that should not exist and the code that creates it (it may be in a library: then the app's fix is how it
+uses that library). Without a trace, look for what outlives the Activity: static or object fields, singletons, listeners or callbacks registered
 without being unregistered, coroutines or threads capturing a Context, ViewModels holding Views or Activities.
 For 'slow_start', the Perfetto launch breakdown shows where the slowest launch spent its main-thread time
 (bindApplication = Application.onCreate and content providers/initializers, activityStart = Activity.onCreate and
@@ -101,6 +103,15 @@ def _failure_text(result: dict, spec: dict, screen: dict | None) -> str:
         lines.append(f"frame stats: {metrics['frames']}")
     if metrics.get("memory_before"):
         lines.append(f"memory after forced GC: before {metrics['memory_before']}, after {metrics.get('memory_after')}")
+    leak = metrics.get("leak") or {}
+    if leak.get("destroyed"):
+        lines.append("destroyed during the attack (LeakCanary's log): " + ", ".join(leak["destroyed"]))
+    if leak.get("trace"):
+        lines.append("Shark (LeakCanary's heap analyser) on a heap dump after the attack. Each trace is the reference "
+                     "chain from a GC root to the leaked object; references under ~~~ are the suspects, the leak is "
+                     "where 'NOT leaking' turns into 'Leaking: YES':\n" + leak["trace"])
+    elif leak.get("note"):
+        lines.append(f"no reference chain: {leak['note']}")
     if metrics.get("startup"):
         lines.append(f"launch times (ms, Android's am start -W): {metrics['startup']}")
     if metrics.get("trace"):

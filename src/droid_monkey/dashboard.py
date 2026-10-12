@@ -162,6 +162,11 @@ def _case(o: dict, run_dir: Path, app_dir: Path | None, fault: str) -> str:
     if (ev / "logcat.txt").exists():
         name = "Android's ANR record" if o["before"] == "anr" else "Crash log"
         details.append((name, f"<div class='scroll'><pre>{esc((ev / 'logcat.txt').read_text()[:8000])}</pre></div>", False))
+    if (ev / "leak-trace.txt").exists():
+        details.append(("Leak trace (Shark)", f"<div class='scroll'><pre>{esc((ev / 'leak-trace.txt').read_text())}</pre></div>"
+                        f"<p class='hint'>The reference chain from a GC root to the leaked screen; the suspects are "
+                        f"underlined with <code>~~~</code>. Heap dump: <code>{rel}/heap.hprof</code> (Android Studio "
+                        "&rarr; Profiler &rarr; Load from file).</p>", True))
     if (ev / "trace-analysis.txt").exists():
         details.append(("Perfetto analysis", f"<div class='scroll'><pre>{esc((ev / 'trace-analysis.txt').read_text())}</pre></div>"
                         f"<p class='hint'>Open <code>{rel}/trace.perfetto-trace</code> at "

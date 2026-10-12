@@ -39,7 +39,7 @@ Built-in attacks are generic templates, filled per app from the screen map:
 | `rotation` | Rotate while work started by a tap is still running, or on a filled form | `crashed`, `lost_state` |
 | `network_loss` | Drop wifi and data, then submit or start slow work | `crashed`, `no_feedback` (silent failure) |
 | `permission_revoke` | Grant a permission through the app, revoke it the way Settings does, use the feature again | `crashed` |
-| `low_memory` | Recreate the screen 3 times, send critical and background trim signals, come back | `leaked`: more live Activities after a forced GC than at the start, or the heap grew by half and 16 MB |
+| `low_memory` | Recreate the screen 3 times, send critical and background trim signals, come back | `leaked`: more live Activities after a forced GC than at the start, or the heap grew by half and 16 MB. On a leak, droid-monkey dumps the heap and runs **Shark** (LeakCanary's analyser, `brew install leakcanary-shark`) for the exact reference chain that holds the screen; if the app ships LeakCanary, its log adds which screens were destroyed |
 | `performance` | Busy-loop 4 CPU cores, scroll, use the screen's slowest action, press a key while it runs | `froze`: any frame over 700 ms (Play vitals "frozen"); `anr`: Android declares the app not responding (the main thread's stack is pulled from Android's own ANR record) |
 | `slow_startup` | 5 cold starts and 3 hot starts, timed by Android (`am start -W`) | `slow_start`: median cold start ≥ 5 s or hot start ≥ 1.5 s (Play vitals) |
 
