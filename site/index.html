@@ -298,6 +298,7 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       <a class="opt" href="#demo">Demo</a>
       <a class="opt" href="#how">How it works</a>
       <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#dashboard">Dashboard</a>
       <a class="opt" href="#watch">Watch</a>
       <a class="opt" href="#hunt">Hunt</a>
       <a class="opt" href="#ux">UX audit</a>
@@ -752,6 +753,21 @@ footer pre{margin:0;font-size:11px;line-height:1.25;color:var(--banana-ink)}
       <div class="cmd-item"><code>run</code><p>The full loop: attack, diagnose, ask you, fix, replay the identical attack, commit.</p></div>
       <div class="cmd-item"><code>dashboard</code><p>A live local page over every run, screen, heatmap and issue; stream the emulator and run any command.</p></div>
       <div class="cmd-item"><code>report · compare · pr</code><p>Score card and receipt, before/after tables, and a PR with the evidence.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="dashboard">
+  <div class="wrap">
+    <div class="eyebrow">Terminal or browser</div>
+    <h2>Run it from your terminal, or all of it from your browser.</h2>
+    <p class="lead">The CLI talks in monkeys: a face for every verdict, and a "Fix it?" before every change.
+      <code>droid-monkey dashboard</code> serves the same thing as a live local page. Run any command from a form,
+      watch the output stream next to the emulator's screen, answer "Fix it?" with a button, fix issues from one
+      ranked list, and open the PR. It listens on 127.0.0.1 only.</p>
+    <div class="sp-shots" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));margin-top:28px;align-items:start">
+      <figure class="shot"><img src="assets/cli-run.gif" alt="droid-monkey run in a terminal on MonkeyMart: a process-death attack, the lost-state monkey, diagnosis, Fix it? yes, a failed verify, a revised diagnosis, FIXED and the commit" width="936" height="700" loading="lazy"><figcaption><b>In the terminal.</b> A real run on MonkeyMart: the first fix fails on the device, so droid-monkey revises its diagnosis, asks again, and commits only once the replay survives.</figcaption></figure>
+      <figure class="shot"><img src="assets/dashboard-tour.gif" alt="A tour of the droid-monkey dashboard on MonkeyMart: the overview, the Commands page, a finished run's live output, the run report with Open PR, the ranked issues, and the screen map" width="1200" height="750" loading="lazy"><figcaption><b>In the browser.</b> The same run from the dashboard: overview → Commands → the run's output → its report → Issues → Screens. How to use it: <a href="https://github.com/shubhasai/droid-monkey/blob/main/SETUP.md#10-using-it-from-the-dashboard">SETUP.md</a>.</figcaption></figure>
     </div>
   </div>
 </section>
