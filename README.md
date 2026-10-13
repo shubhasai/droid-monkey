@@ -69,6 +69,9 @@ droid-monkey run        # the full loop: asks you before every fix
 droid-monkey pr <run>   # open a PR with the evidence
 ```
 
+<p align="center"><img src="docs/img/cli-run.gif" width="800" alt="droid-monkey run on MonkeyMart: a process-death attack, the lost-state monkey, diagnosis, Fix it? yes, a failed verify, a revised diagnosis, FIXED and the commit"></p>
+<p align="center"><sub>A real run on MonkeyMart: the first fix fails on the device, so droid-monkey revises its diagnosis and tries again. Setup, step by step: <a href="SETUP.md">SETUP.md</a></sub></p>
+
 | You need | For |
 |---|---|
 | Android SDK with `adb`, the emulator and one AVD | Running the app and the attacks |
@@ -222,6 +225,9 @@ sequenceDiagram
 </td>
 </tr>
 </table>
+
+<p align="center"><img src="docs/img/dashboard-tour.gif" width="820" alt="A tour of the droid-monkey dashboard on MonkeyMart: overview, Commands, a run's output, the run report, Issues and Screens"></p>
+<p align="center"><sub><code>droid-monkey dashboard</code>: run every command, answer "Fix it?" and fix issues from the browser. How to use it: <a href="SETUP.md#10-using-it-from-the-dashboard">SETUP.md</a></sub></p>
 
 ## Attacks
 
